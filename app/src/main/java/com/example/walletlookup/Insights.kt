@@ -89,10 +89,57 @@ suspend fun findTransfers(raw: String, network: String, symbol: String, change: 
         val a = rawAddress(raw)
         val c = EVM_HIST.firstOrNull { it.name == network && it.chainId in LOG_NODES && it.symbol.equals(symbol, true) }
         val candidates = if (c != null && detect(a) == AddrType.EVM) runCatching { logWindow(c, a, time) }.getOrNull()
+        // Plain TRX (Tron's own coin): the Tron history only lists USDT, so ask for coin transfers directly.
+        else if (network == "Tron" && symbol.equals("TRX", true)) runCatching { tronCoinWindow(a, time) }.getOrNull()
         else runCatching { history(raw, setOf(network), limit = 100) }.getOrNull()?.flatMap { it.items }
             ?.filter { it.symbol.equals(symbol, true) && (it.time <= 0 || it.time in time - 3 * 3_600_000L..time + 15 * 60_000L) }
         pickTransfers(candidates.orEmpty(), change, time)
     }
+
+/** Plain TRX transfers in and out of [a] from 3 hours before [time] to 15 minutes after (TronGrid; Tronscan as backup). */
+private fun tronCoinWindow(a: String, time: Long): List<Transfer> {
+    val from = time - 3 * 3_600_000L
+    val to = time + 15 * 60_000L
+    fun transfer(hash: String, f: String, t: String, sun: Long, ts: Long): Transfer {
+        val incoming = t == a
+        return Transfer(incoming, amount(BigInteger.valueOf(sun), 6), if (incoming) f else t, ts,
+            "https://tronscan.org/#/transaction/$hash", hash, f, t, "TRX")
+    }
+    runCatching {
+        val arr = JSONObject(http("https://api.trongrid.io/v1/accounts/$a/transactions?only_confirmed=true&limit=100" +
+            "&min_timestamp=$from&max_timestamp=$to")).getJSONArray("data")
+        return (0 until arr.length()).mapNotNull { i ->
+            val tx = arr.getJSONObject(i)
+            val c = tx.getJSONObject("raw_data").getJSONArray("contract").getJSONObject(0)
+            if (c.getString("type") != "TransferContract") return@mapNotNull null
+            val v = c.getJSONObject("parameter").getJSONObject("value")
+            transfer(tx.getString("txID"), tronBase58(v.getString("owner_address")), tronBase58(v.getString("to_address")),
+                v.getLong("amount"), tx.getLong("block_timestamp"))
+        }
+    }
+    val arr = JSONObject(http("https://apilist.tronscanapi.com/api/transaction?sort=-timestamp&limit=50&start=0&address=$a" +
+        "&start_timestamp=$from&end_timestamp=$to")).getJSONArray("data")
+    return (0 until arr.length()).mapNotNull { i ->
+        val tx = arr.getJSONObject(i)
+        if (tx.optInt("contractType") != 1) return@mapNotNull null // 1 = TRX transfer
+        transfer(tx.getString("hash"), tx.getString("ownerAddress"), tx.getString("toAddress"),
+            tx.optString("amount", "0").toLong(), tx.getLong("timestamp"))
+    }
+}
+
+/** Tron's hex address ("41…") as the usual T… address (Base58 with a 4-byte double-SHA-256 checksum). */
+internal fun tronBase58(hex: String): String {
+    val bytes = hex.chunked(2).map { it.toInt(16).toByte() }.toByteArray()
+    val sha = java.security.MessageDigest.getInstance("SHA-256")
+    val check = sha.digest(sha.digest(bytes)).copyOf(4)
+    var n = BigInteger(1, bytes + check)
+    val alphabet = "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz"
+    val sb = StringBuilder()
+    val base = BigInteger.valueOf(58)
+    while (n.signum() > 0) { val (q, r) = n.divideAndRemainder(base); sb.append(alphabet[r.toInt()]); n = q }
+    for (b in bytes + check) { if (b.toInt() == 0) sb.append('1') else break }
+    return sb.reverse().toString()
+}
 
 /** One transfer of exactly [change], else the newest ones up to [time] whose amounts add up to it. */
 fun pickTransfers(candidates: List<Transfer>, change: java.math.BigDecimal, time: Long): List<Transfer> {
