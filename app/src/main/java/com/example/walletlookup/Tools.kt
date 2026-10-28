@@ -19,6 +19,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -97,6 +98,8 @@ fun TxCheckDialog(initial: String = "", onFound: (TxInfo) -> Unit, onDismiss: ()
             if (r != null) onFound(r) else error = tr("Not found on the supported networks.")
         }
     }
+    // Opened with an ID already filled in (shared, pasted or "Check as transaction ID"): search straight away.
+    LaunchedEffect(Unit) { if (looksLikeTxHash(initial)) check() }
     AlertDialog(
         onDismissRequest = onDismiss,
         title = { Text("Check transaction") },

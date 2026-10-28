@@ -195,12 +195,12 @@ private fun tonTx(h: String): TxInfo? {
         a.optJSONObject("JettonTransfer")?.let { j ->
             val jet = j.optJSONObject("jetton")
             return TxInfo("TON", Transfer(true, amount(BigInteger(j.optString("amount", "0")), jet?.optInt("decimals", 9) ?: 9), null, time, url, h,
-                j.optJSONObject("sender")?.optString("address"), j.optJSONObject("recipient")?.optString("address"),
+                tonFriendly(j.optJSONObject("sender")?.optString("address")), tonFriendly(j.optJSONObject("recipient")?.optString("address")),
                 jet?.optString("symbol")?.replace("₮", "T") ?: "Token"), status)
         }
         a.optJSONObject("TonTransfer")?.let { t ->
             return TxInfo("TON", Transfer(true, amount(BigInteger.valueOf(t.optLong("amount")), 9), null, time, url, h,
-                t.optJSONObject("sender")?.optString("address"), t.optJSONObject("recipient")?.optString("address"), "TON"), status)
+                tonFriendly(t.optJSONObject("sender")?.optString("address")), tonFriendly(t.optJSONObject("recipient")?.optString("address")), "TON"), status)
         }
     }
     return TxInfo("TON", Transfer(true, BigDecimal.ZERO, null, time, url, h, null, null, "TON"), status)

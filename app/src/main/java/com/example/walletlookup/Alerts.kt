@@ -82,16 +82,23 @@ object Alerts {
             ContextCompat.startForegroundService(context, Intent(context, WatchService::class.java))
         } else {
             context.stopService(Intent(context, WatchService::class.java))
-            scheduleCharging(context, ExistingWorkPolicy.KEEP)
+            // Once after updating from 16.8 or older: replace the old queued run, which waited on Android's
+            // "charging" condition and could stay stuck.
+            val prefs = context.getSharedPreferences("alerts", Context.MODE_PRIVATE)
+            if (!prefs.getBoolean("charging2", false)) {
+                WorkManager.getInstance(context).cancelUniqueWork(CHARGING)
+                prefs.edit().putBoolean("charging2", true).apply()
+            }
+            if (pluggedIn(context)) scheduleCharging(context, ExistingWorkPolicy.KEEP)
         }
     }
 
-    /** Battery saver: a job Android starts once the phone is plugged in; it then checks every 30 seconds. */
-    fun scheduleCharging(context: Context, policy: ExistingWorkPolicy, delayMinutes: Long = 0) {
-        val req = OneTimeWorkRequestBuilder<ChargingWorker>()
-            .setConstraints(Constraints.Builder().setRequiredNetworkType(NetworkType.CONNECTED).setRequiresCharging(true).build())
-            .setInitialDelay(delayMinutes, TimeUnit.MINUTES)
-            .build()
+    /**
+     * Battery saver: the 30-second loop while plugged in. Started when the app opens or the 15-minute job finds the
+     * phone plugged in. Android's own "charging" condition isn't used: it can stay unmet on a full battery.
+     */
+    fun scheduleCharging(context: Context, policy: ExistingWorkPolicy) {
+        val req = OneTimeWorkRequestBuilder<ChargingWorker>().setConstraints(online).build()
         WorkManager.getInstance(context).enqueueUniqueWork(CHARGING, policy, req)
     }
 
@@ -305,30 +312,35 @@ object Alerts {
 
 /** Standard mode (and safety net for instant mode): runs about every 15 minutes. */
 /**
- * Battery saver while charging: checks every 30 seconds for up to ~9 minutes (Android's limit for one job),
+ * Battery saver while charging: checks every 30 seconds for up to 4 minutes (Android may stop a job after 5),
  * then queues the next run, which Android starts again as long as the phone is still plugged in.
  */
 class ChargingWorker(context: Context, params: WorkerParameters) : CoroutineWorker(context, params) {
     override suspend fun doWork(): Result {
         val store = Store(applicationContext)
         if (!store.alertsEnabled || store.instantAlerts) return Result.success()
-        val end = System.currentTimeMillis() + 9 * 60_000L
+        val end = System.currentTimeMillis() + 4 * 60_000L
         var rounds = 0
         while (System.currentTimeMillis() < end && !isStopped && Alerts.pluggedIn(applicationContext)) {
             runCatching { Alerts.checkWallets(applicationContext) }
             rounds++
             delay(Alerts.INSTANT_INTERVAL_MS)
         }
-        // Next run waits for the charger (and network) again. If this run found the phone unplugged, wait
-        // 10 minutes first: Android can briefly still think it is charging, which would otherwise restart it
-        // over and over.
-        Alerts.scheduleCharging(applicationContext, ExistingWorkPolicy.APPEND_OR_REPLACE, if (rounds == 0) 10 else 0)
+        // Still plugged in: carry on in a new run. Unplugged: stop; the 15-minute job restarts it next time it
+        // finds the phone plugged in.
+        if (rounds > 0 && !isStopped && Alerts.pluggedIn(applicationContext)) {
+            Alerts.scheduleCharging(applicationContext, ExistingWorkPolicy.APPEND_OR_REPLACE)
+        }
         return Result.success()
     }
 }
 
 class BalanceWorker(context: Context, params: WorkerParameters) : CoroutineWorker(context, params) {
     override suspend fun doWork(): Result {
+        val store = Store(applicationContext)
+        if (store.alertsEnabled && !store.instantAlerts && Alerts.pluggedIn(applicationContext)) {
+            Alerts.scheduleCharging(applicationContext, ExistingWorkPolicy.KEEP)
+        }
         Alerts.checkWallets(applicationContext)
         return Result.success()
     }

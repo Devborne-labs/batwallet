@@ -6,6 +6,7 @@ import androidx.compose.foundation.pager.HorizontalPager
 import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Refresh
+import androidx.compose.material.icons.filled.Share
 import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.Notifications
 import androidx.compose.material.icons.filled.Build
@@ -529,6 +530,9 @@ private fun App(
     LaunchedEffect(shared) {
         val text = shared ?: return@LaunchedEffect
         onSharedHandled()
+        // Full-screen pages would cover the result, so shared text always lands on Home.
+        scanning = false; txInfo = null; homeTx = null; historyFor = null
+        tab = TAB_HOME
         if (!handleText(text, fromPhoto = false)) {
             android.widget.Toast.makeText(context, tr("No wallet address found"), android.widget.Toast.LENGTH_SHORT).show()
         }
@@ -1324,7 +1328,7 @@ private fun TotalHeader(
     ) {
         Text("Total", style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.onSurfaceVariant)
         Text(
-            if (saved.isEmpty()) "$0.00" else if (known.isEmpty()) "…" else hideable(money(usd)),
+            if (saved.isEmpty()) money(BigDecimal.ZERO) else if (known.isEmpty()) "…" else hideable(money(usd)),
             style = MaterialTheme.typography.displaySmall,
             fontWeight = FontWeight.SemiBold,
         )
@@ -1427,7 +1431,7 @@ private fun BalanceCard(
             }
             if (failed.isNotEmpty()) {
                 Spacer(Modifier.height(10.dp))
-                Text("Couldn't reach: " + failed.joinToString(", ") { it.network },
+                Text(tr("Couldn't reach:") + " " + failed.joinToString(", ") { it.network },
                     style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.error)
             }
         }
@@ -2454,7 +2458,7 @@ private fun SettingGroup(title: String, summary: String, expanded: Boolean, onTo
             when (title) {
                 "Notifications" -> Icon(Icons.Filled.Notifications, null, Modifier.size(20.dp))
                 "Security" -> Icon(Icons.Filled.Lock, null, Modifier.size(20.dp))
-                "Backup" -> Icon(Icons.Filled.Refresh, null, Modifier.size(20.dp))
+                "Backup" -> Icon(Icons.Filled.Share, null, Modifier.size(20.dp))
                 "Etherscan API key" -> Icon(Icons.Filled.Build, null, Modifier.size(20.dp))
                 "Report a problem" -> Icon(Icons.Filled.Info, null, Modifier.size(20.dp))
                 "Updates" -> Icon(Icons.Filled.Refresh, null, Modifier.size(20.dp))

@@ -76,6 +76,8 @@ fun SafetyCard(
         twin != null -> "Lookalike of your saved \"${twin.name}\""
         badCheck != null -> badCheck.title
         savedWallet?.contact == true -> "Your contact · ${savedWallet.name}"
+        // An exchange's wallet (or your deposit address there) isn't yours to spend from.
+        savedWallet != null && savedWallet.onExchange -> tr("In your wallets") + " · ${savedWallet.name}"
         savedWallet != null -> "Your own wallet"
         safety == null && loading -> "Checking…"
         safety == null -> "Couldn't check right now"
@@ -121,7 +123,7 @@ fun SafetyCard(
                 if (!open) {
                     // Short ticks on one line.
                     Text(
-                        s.checks.joinToString("   ") { "${icon(it.level)} ${it.title}" },
+                        s.checks.joinToString("   ") { "${icon(it.level)} ${tr(it.title)}" },
                         style = MaterialTheme.typography.labelSmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                         maxLines = 2,
@@ -131,7 +133,7 @@ fun SafetyCard(
                 } else {
                     s.checks.forEach { c ->
                         Column(Modifier.padding(top = 6.dp)) {
-                            Text("${icon(c.level)} ${c.title}", style = MaterialTheme.typography.labelLarge,
+                            Text("${icon(c.level)} ${tr(c.title)}", style = MaterialTheme.typography.labelLarge,
                                 color = if (c.level == Level.BAD) red else MaterialTheme.colorScheme.onSurface)
                             Text(c.detail, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                         }
@@ -280,7 +282,7 @@ fun HistoryScreen(
                         }
                         if (shown.isNotEmpty() && quiet.isNotEmpty()) {
                             item {
-                                Text("No transfers on: " + quiet.joinToString(", ") { it.network },
+                                Text(tr("No transfers on:") + " " + quiet.joinToString(", ") { it.network },
                                     style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                             }
                         }

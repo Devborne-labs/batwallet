@@ -11,8 +11,8 @@ android {
         applicationId = "com.malluwayne.batwallet"
         minSdk = 28
         targetSdk = 36
-        versionCode = 35
-        versionName = "16.8"
+        versionCode = 36
+        versionName = "16.9"
     }
 
     buildTypes {

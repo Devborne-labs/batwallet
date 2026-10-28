@@ -360,7 +360,7 @@ private fun logHistory(c: EvmHist, a: String, maxRequests: Int = 4 + (LIMIT - 25
     return History(
         c.name, items,
         note = if (reachedStart || since == null) null
-        else "Checked back to ${date(since)}. Load more looks further back.",
+        else tr("Checked back to") + " ${date(since)}. " + tr("Load more looks further back."),
         canLoadMore = !reachedStart,
     )
 }
@@ -466,14 +466,33 @@ private fun tonHistory(a: String): History {
             items += Transfer(
                 incoming,
                 amount(BigInteger(t.getString("amount")), 6),
-                if (incoming) sender else recipient,
+                tonFriendly(if (incoming) sender else recipient),
                 e.getLong("timestamp") * 1000,
                 "https://tonviewer.com/transaction/" + e.getString("event_id"),
-                e.getString("event_id"), sender, recipient,
+                e.getString("event_id"), tonFriendly(sender), tonFriendly(recipient),
             )
         }
     }
     return History("TON", items)
+}
+
+/** The API gives "0:ab12…"; wallets show the "UQ…" form (non-bounceable, mainnet), so show that. */
+internal fun tonFriendly(raw: String?): String? {
+    val parts = raw?.split(':') ?: return null
+    val wc = parts.getOrNull(0)?.toIntOrNull()
+    val hex = parts.getOrNull(1)
+    if (parts.size != 2 || wc == null || hex == null || !hex.matches(Regex("[0-9a-fA-F]{64}"))) return raw
+    val body = ByteArray(34)
+    body[0] = 0x51
+    body[1] = wc.toByte()
+    for (i in 0 until 32) body[2 + i] = hex.substring(i * 2, i * 2 + 2).toInt(16).toByte()
+    var crc = 0 // CRC-16/XMODEM
+    for (b in body) {
+        crc = crc xor ((b.toInt() and 0xff) shl 8)
+        repeat(8) { crc = if (crc and 0x8000 != 0) (crc shl 1) xor 0x1021 else crc shl 1 }
+        crc = crc and 0xffff
+    }
+    return java.util.Base64.getUrlEncoder().encodeToString(body + byteArrayOf((crc shr 8).toByte(), crc.toByte()))
 }
 
 // ===================== Safety check =====================

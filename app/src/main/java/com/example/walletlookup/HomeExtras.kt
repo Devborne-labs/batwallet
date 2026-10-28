@@ -237,7 +237,7 @@ fun RecentTxSection(
                                     ExchangeBadge(it, 16.dp)
                                     Spacer(Modifier.width(6.dp))
                                 }
-                                Text((if (t.incoming) "From " else "To ") + (other ?: net), maxLines = 1,
+                                Text(tr(if (t.incoming) "From" else "To") + " " + (other ?: net), maxLines = 1,
                                     overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis, fontWeight = FontWeight.Medium)
                             }
                             // Which of your wallets it was, then when.
