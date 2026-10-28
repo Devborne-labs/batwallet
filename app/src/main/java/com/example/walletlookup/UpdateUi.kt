@@ -1,6 +1,14 @@
 package com.example.walletlookup
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.width
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Refresh
+import androidx.compose.material3.Icon
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.draw.clip
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Row
@@ -117,6 +125,24 @@ fun UpdateProgressDialog() {
             }
         },
     )
+}
+
+/** Home's small "Version x is available" line; tap to go to Settings → Updates. */
+@Composable
+fun UpdateBanner(version: String, onClick: () -> Unit) {
+    Row(
+        Modifier.fillMaxWidth().padding(top = 4.dp).clip(RoundedCornerShape(14.dp))
+            .background(MaterialTheme.colorScheme.surfaceVariant).clickable(onClick = onClick)
+            .padding(horizontal = 16.dp, vertical = 12.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Icon(Icons.Filled.Refresh, contentDescription = null, modifier = Modifier.size(18.dp))
+        Spacer(Modifier.width(10.dp))
+        Text(tr("Version") + " $version " + tr("is available"), style = MaterialTheme.typography.bodyMedium,
+            modifier = Modifier.weight(1f))
+        Text("Update", style = MaterialTheme.typography.labelLarge, fontWeight = FontWeight.SemiBold,
+            color = MaterialTheme.colorScheme.primary)
+    }
 }
 
 /** Shown once after updating: what changed in this version. */

@@ -72,10 +72,14 @@ private val EXCHANGES = listOf(
 )
 
 /** True for a wallet on an exchange: its folder or name mentions one, or it is a known exchange address. */
-fun isExchangeWallet(address: String, folder: String = "", name: String = ""): Boolean {
-    val text = "$folder $name".lowercase()
-    return knownPlatform(address) != null || EXCHANGE_WORDS.any { it.containsMatchIn(text) }
-}
+fun isExchangeWallet(address: String, folder: String = "", name: String = ""): Boolean =
+    // Asked many times per screen (totals, rows, folders): remember answers instead of re-running the matching.
+    exchangeMemo.getOrPut("$address|$folder|$name") {
+        val text = "$folder $name".lowercase()
+        knownPlatform(address) != null || EXCHANGE_WORDS.any { it.containsMatchIn(text) }
+    }
+
+private val exchangeMemo = java.util.concurrent.ConcurrentHashMap<String, Boolean>()
 
 /** Whole words only, so "Gateway" isn't Gate.io and "Bybit 2" or "gate.io" still count. */
 private val EXCHANGE_WORDS = EXCHANGES.map { Regex("(?<![a-z])" + Regex.escape(it) + "(?![a-z])") }

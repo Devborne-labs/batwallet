@@ -3,6 +3,7 @@ package com.example.walletlookup
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.foundation.pager.HorizontalPager
+import androidx.compose.foundation.pager.PagerDefaults
 import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Refresh
@@ -237,6 +238,7 @@ class MainActivity : FragmentActivity() {
         lockEnabled = store.lockEnabled
         lockTimeout = store.lockTimeoutSec
         store.switchToUsdtOnce()
+        store.dropChartData()
         fiat = store.currency
         fiatRate = store.currencyRate
         // The lock always covers the whole app (locking only Wallets left the total visible on Home).
@@ -552,7 +554,6 @@ private fun App(
     var todayChange by remember { mutableStateOf<DayChange?>(null) }
     var tokens by remember { mutableStateOf<List<TokenBalance>?>(null) }
     var tokensFor by remember { mutableStateOf<String?>(null) }
-    var totalPoints by remember { mutableStateOf(store.loadTotalPoints()) }
 
     fun remember(addr: String, fresh: List<ChainResult>): List<ChainResult> {
         // Networks that failed this time keep their last good result.
@@ -640,8 +641,13 @@ private fun App(
         if (!forced && recentTx.isNotEmpty() && System.currentTimeMillis() - store.recentTxAt < 5 * 60_000L) return@LaunchedEffect
         delay(800)
         snapshotFlow { syncing.isEmpty() }.first { it }
-        val mine = saved.filter { !it.contact && !it.archived }
-        if (mine.isEmpty()) return@LaunchedEffect
+        // An exchange's own wallet (a known public one) moves other people's money all day: keep it off Home.
+        // Your deposit addresses in an exchange folder still show.
+        val mine = saved.filter { !it.contact && !it.archived && knownPlatform(it.address) == null }
+        if (mine.isEmpty()) {
+            if (recentTx.isNotEmpty()) { recentTx = emptyList(); store.saveRecentTx(recentTx) }
+            return@LaunchedEffect
+        }
         val all = mutableListOf<Triple<String, String, Transfer>>()
         for (w in mine) {
             try {
@@ -664,8 +670,10 @@ private fun App(
             val t = x.third
             val dup = unique.any { (w, _, u) ->
                 w == x.first && u.incoming == t.incoming && u.symbol == t.symbol &&
-                    ((t.hash != null && u.hash != null && u.hash.equals(t.hash, true)) ||
-                        (u.amount.compareTo(t.amount) == 0 && kotlin.math.abs(u.time - t.time) < 600_000))
+                    // Both have a transaction ID: compare those. Otherwise same amount within an hour (an alert can
+                    // notice a payment well after it happened).
+                    (if (t.hash != null && u.hash != null) u.hash.equals(t.hash, true)
+                    else u.amount.compareTo(t.amount) == 0 && kotlin.math.abs(u.time - t.time) < 3_600_000)
             }
             if (!dup) unique += x
         }
@@ -678,15 +686,6 @@ private fun App(
 
     // Today's change of the saved-wallets total, recalculated whenever balances update.
     LaunchedEffect(cache, saved, syncing.isEmpty()) {
-        // Record the total for the chart only after a full refresh, so half-updated totals don't show as spikes.
-        val mine = saved.filter { !it.contact && !it.archived && !it.onExchange }
-        if (syncing.isEmpty() && mine.isNotEmpty() && mine.all { cache.containsKey(it.address) }) {
-            val total = mine.mapNotNull { cache[it.address]?.totals?.usd }.fold(BigDecimal.ZERO, BigDecimal::add)
-            if (total.signum() > 0) {
-                store.addTotalPoint(total, mine.map { it.address }.sorted().joinToString(","))
-                totalPoints = store.loadTotalPoints()
-            }
-        }
         todayChange = try {
             dayChange(saved.filter { !it.contact && !it.archived && !it.onExchange }.flatMap { cache[it.address]?.results.orEmpty() })
         } catch (e: CancellationException) {
@@ -907,6 +906,8 @@ private fun App(
             // While a wallet page is open, swiping is off so it can't be left half-way.
             userScrollEnabled = address.isEmpty(),
             beyondViewportPageCount = 1,
+            // A short, quick swipe is enough to change page (the default needs half the screen, which felt stuck).
+            flingBehavior = PagerDefaults.flingBehavior(state = pager, snapPositionalThreshold = 0.2f),
         ) { page ->
         Column(Modifier.fillMaxSize()) {
             if (page == TAB_SETTINGS) {
@@ -919,6 +920,7 @@ private fun App(
             }
             when (page) {
                 TAB_HOME -> HomeTab(
+                    onOpenUpdate = { SelfUpdate.openInSettings = true; tab = TAB_SETTINGS },
                     saved = saved,
                     cache = cache,
                     syncing = syncing,
@@ -944,7 +946,6 @@ private fun App(
                     onReceive = { receiveFor = it },
                     dayChange = todayChange,
                     tokens = tokens,
-                    points = totalPoints,
                     detail = address.isNotEmpty(),
                     backLabel = if (trail.isNotEmpty()) "← Back" else if (fromWallets) "← Wallets" else "← Home",
                     onBack = { closeDetail() },
@@ -1129,9 +1130,10 @@ private fun HomeTab(
     onReceive: (SavedAddress) -> Unit,
     dayChange: DayChange?,
     tokens: List<TokenBalance>?,
-    points: List<Pair<Long, BigDecimal>>,
     /** Opened from the Wallets tab: show a back link instead of the total and search buttons. */
     detail: Boolean,
+    /** "Update available" on Home was tapped: go to Settings → Updates. */
+    onOpenUpdate: () -> Unit = {},
     backLabel: String,
     onBack: () -> Unit,
     recent: List<Pair<String, Long>>,
@@ -1147,6 +1149,8 @@ private fun HomeTab(
     onOpenTx: (String, Transfer) -> Unit,
 ) {
     val context = LocalContext.current
+    // A newer version found by the weekly check (or in Settings), shown as one small line under the total.
+    val newer = remember(cache) { knownUpdate(context) }
     val clipboard = LocalClipboardManager.current
     val savedWallet = saved.firstOrNull { it.address == address }
     val addressNames = remember(saved) { nameLabels(saved) }
@@ -1167,6 +1171,8 @@ private fun HomeTab(
                 }
             } else {
             item { TotalHeader(saved.filter { !it.contact && !it.archived && !it.onExchange }, cache, syncing, dayChange, onToggleHidden) }
+            // A newer version found by the weekly check (or by Settings): one small line, tap to update.
+            if (newer != null) item { UpdateBanner(newer, onOpenUpdate) }
             item {
                 Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                     // Tap: finds the address in whatever was copied (even a whole message), else shows recent checks.
@@ -1491,7 +1497,6 @@ private fun WalletsTab(
     val showContacts = sub.currentPage == 1
     var renaming by remember { mutableStateOf<String?>(null) }
     // Drag handles only show in "Edit order" mode (from the ⋯ menu), so normal rows stay clean.
-    var editOrder by remember { mutableStateOf(false) }
     var moreMenu by remember { mutableStateOf(false) }
     var query by remember { mutableStateOf("") }
     var showArchived by remember { mutableStateOf(false) }
@@ -1501,7 +1506,6 @@ private fun WalletsTab(
     var deletingSelected by remember { mutableStateOf(false) }
     val selecting = selected.isNotEmpty()
     BackHandler(enabled = selecting) { selected = emptySet() }
-    BackHandler(enabled = editOrder && !selecting) { editOrder = false }
     val mine = saved.filter { !it.contact && !it.archived }
     val groups = mine.map { it.group }.filter { it.isNotBlank() }.distinct().sorted()
     val archivedCount = saved.count { it.archived }
@@ -1574,9 +1578,7 @@ private fun WalletsTab(
                         Text(hideable(money(usd(current.shown.filter { !it.archived }))), style = MaterialTheme.typography.headlineMedium,
                             fontWeight = FontWeight.Bold)
                     }
-                    if (editOrder) {
-                        TextButton(onClick = { editOrder = false }) { Text("Done", fontWeight = FontWeight.SemiBold) }
-                    } else {
+                    run {
                         IconButton(onClick = { adding = true }) {
                             Icon(Icons.Filled.Add, contentDescription = if (showContacts) "Add contact" else "Add wallet")
                         }
@@ -1598,7 +1600,6 @@ private fun WalletsTab(
                                     text = { Text((if (showArchived) "✓  " else "     ") + tr("Show archived") + " ($archivedCount)") },
                                     onClick = { moreMenu = false; showArchived = !showArchived },
                                 )
-                                DropdownMenuItem(text = { Text("     " + tr("Edit order")) }, onClick = { moreMenu = false; editOrder = true })
                             }
                         }
                     }
@@ -1610,7 +1611,7 @@ private fun WalletsTab(
                 UnderlineTab("Contacts", sub.currentPage == 1, Modifier.weight(1f)) { scope.launch { sub.animateScrollToPage(1) } }
             }
             HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f))
-            if (current.searchable && !editOrder && !selecting) {
+            if (current.searchable && !selecting) {
                 OutlinedTextField(
                     value = query, onValueChange = { query = it }, singleLine = true,
                     placeholder = { Text("Search") },
@@ -1619,15 +1620,15 @@ private fun WalletsTab(
                     modifier = Modifier.fillMaxWidth().padding(top = 10.dp),
                 )
             }
-            if (editOrder) {
-                Text("Drag ≡, or hold a wallet and drag", style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(top = 10.dp))
-            }
         }
 
         PullToRefreshBox(isRefreshing = syncing.isNotEmpty(), onRefresh = onRefreshAll, modifier = Modifier.fillMaxSize()) {
             // Swiping past the last page carries on to the next app tab (Home / Settings).
-            HorizontalPager(state = sub, modifier = Modifier.fillMaxSize(), userScrollEnabled = !editOrder && !selecting) { p ->
+            HorizontalPager(
+                state = sub, modifier = Modifier.fillMaxSize(), userScrollEnabled = !selecting,
+                beyondViewportPageCount = 1, // Contacts is ready before you swipe to it
+                flingBehavior = PagerDefaults.flingBehavior(state = sub, snapPositionalThreshold = 0.2f),
+            ) { p ->
                 val pg = pages[p]
                 val listState = rememberLazyListState()
                 val drag = remember(listState) { Reorder(listState) }
@@ -1664,6 +1665,12 @@ private fun WalletsTab(
                         if (showHeader) {
                             item(key = "group:$group") {
                                 var folderMenu by remember { mutableStateOf(false) }
+                                // Named folders move (not while searching or selecting); "Other" always stays last.
+                                val canDragFolder = !selecting && query.isEmpty() && pg.orderedNames.size > 1 && group in pg.orderedNames
+                                val swapFolder: (String, String) -> Unit = { a, b ->
+                                    adoptShownOrder(pg)
+                                    onSwapGroups(a.removePrefix("group:"), b.removePrefix("group:"), pg.orderedNames)
+                                }
                                 Row(
                                     (if (drag.key == "group:$group") Modifier.dragged(drag, "group:$group") else Modifier.animateItem()).fillMaxWidth()
                                         .combinedClickable(
@@ -1671,8 +1678,12 @@ private fun WalletsTab(
                                                 collapsed = if (isCollapsed) collapsed - group else collapsed + group
                                                 onCollapsedChange(collapsed)
                                             },
-                                            onLongClick = { if (group.isNotBlank()) folderMenu = true },
+                                            // Hold to drag the folder; hold without moving opens its menu.
+                                            onLongClick = { if (!canDragFolder && group.isNotBlank()) folderMenu = true },
                                         )
+                                        .then(if (canDragFolder) Modifier.reorderable(drag, "group:$group", pg.orderedNames.map { "group:$it" }, swapFolder) {
+                                            folderMenu = true
+                                        } else Modifier)
                                         .padding(top = 18.dp, bottom = 6.dp, end = 8.dp),
                                     verticalAlignment = Alignment.CenterVertically,
                                 ) {
@@ -1699,13 +1710,6 @@ private fun WalletsTab(
                                             }
                                         }
                                     }
-                                    // Named folders move; "Other" (no folder) always stays last.
-                                    if (editOrder && pg.orderedNames.size > 1 && group in pg.orderedNames) {
-                                        DragHandle(drag, "group:$group", pg.orderedNames.map { "group:$it" }) { a, b ->
-                                            adoptShownOrder(pg)
-                                            onSwapGroups(a.removePrefix("group:"), b.removePrefix("group:"), pg.orderedNames)
-                                        }
-                                    }
                                 }
                             }
                         }
@@ -1716,9 +1720,9 @@ private fun WalletsTab(
                                 val peers = inOrder.filter { it.pinned == item.pinned }.map { it.address }
                                 fun toggle() { selected = if (item.address in selected) selected - item.address else selected + item.address }
                                 val swapRow: (String, String) -> Unit = { a, b -> adoptShownOrder(pg); onSwap(a, b) }
+                                val canDrag = !selecting && query.isEmpty() && peers.size > 1
                                 WalletRow(
-                                    (if (drag.key == item.address) Modifier.dragged(drag, item.address) else Modifier.animateItem())
-                                        .then(if (editOrder && peers.size > 1) Modifier.reorderable(drag, item.address, peers, true, swapRow) else Modifier),
+                                    if (drag.key == item.address) Modifier.dragged(drag, item.address) else Modifier.animateItem(),
                                     item, c,
                                     syncing = item.address in syncing,
                                     failed = item.address in failed,
@@ -1729,9 +1733,7 @@ private fun WalletsTab(
                                     onEdit = { editing = it },
                                     onDelete = { deleting = it },
                                     onPin = onPin,
-                                    handle = if (editOrder && peers.size > 1) {
-                                        { DragHandle(drag, item.address, peers, swapRow) }
-                                    } else null,
+                                    holdDrag = if (canDrag) { onHold -> Modifier.reorderable(drag, item.address, peers, swapRow, onHold) } else null,
                                     selectMode = selecting,
                                     isSelected = item.address in selected,
                                     onToggleSelect = ::toggle,
@@ -1829,7 +1831,8 @@ private fun WalletRow(
     onEdit: (SavedAddress) -> Unit,
     onDelete: (SavedAddress) -> Unit,
     onPin: (SavedAddress) -> Unit,
-    handle: (@Composable () -> Unit)?,
+    /** Hold-and-drag to reorder; given what a hold without moving should do (open the menu). */
+    holdDrag: (@Composable (onHold: () -> Unit) -> Modifier)?,
     selectMode: Boolean = false,
     isSelected: Boolean = false,
     onToggleSelect: () -> Unit = {},
@@ -1837,14 +1840,16 @@ private fun WalletRow(
 ) {
     val context = LocalContext.current
     var menu by remember { mutableStateOf(false) }
+    val dragging = holdDrag?.invoke { menu = true } ?: Modifier
     Row(
         modifier.fillMaxWidth().clip(RoundedCornerShape(12.dp))
             .background(if (isSelected) MaterialTheme.colorScheme.surfaceVariant else ComposeColor.Transparent)
-            // While ordering (handle shown) the row is for dragging only: no opening, no menu.
-            .then(if (handle != null) Modifier else Modifier.combinedClickable(
+            .combinedClickable(
                 onClick = { if (selectMode) onToggleSelect() else onPick(item) },
-                onLongClick = { if (selectMode) onToggleSelect() else menu = true },
-            ))
+                // With hold-and-drag on, the drag gesture opens the menu itself when you hold without moving.
+                onLongClick = { if (selectMode) onToggleSelect() else if (holdDrag == null) menu = true },
+            )
+            .then(dragging)
             .padding(vertical = 12.dp, horizontal = 4.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
@@ -1896,7 +1901,6 @@ private fun WalletRow(
                 DropdownMenuItem(text = { Text("Delete", color = MaterialTheme.colorScheme.error) }, onClick = { menu = false; onDelete(item) })
             }
         }
-        handle?.invoke()
     }
 }
 
@@ -1985,37 +1989,37 @@ private fun Modifier.dragged(r: Reorder, key: String): Modifier =
     if (r.key == key) zIndex(1f).graphicsLayer { translationY = r.shift(key); shadowElevation = 12f } else this
 
 /**
- * Drag to reorder among [peers]: straight away on the ≡ handle, or after holding the row ([afterHold]) so a plain
- * swipe still scrolls the list.
+ * Hold (about half a second, with a little buzz) and drag to reorder among [peers]; a plain swipe still scrolls the list.
+ * Holding without moving calls [onHold] instead (the row's usual menu).
  */
 @Composable
-private fun Modifier.reorderable(r: Reorder, key: String, peers: List<String>, afterHold: Boolean, onSwap: (String, String) -> Unit): Modifier {
+private fun Modifier.reorderable(r: Reorder, key: String, peers: List<String>, onSwap: (String, String) -> Unit, onHold: () -> Unit): Modifier {
     val peersNow by rememberUpdatedState(peers)
     val swapNow by rememberUpdatedState(onSwap)
-    return pointerInput(key, afterHold) {
-        val onDrag: (androidx.compose.ui.input.pointer.PointerInputChange, androidx.compose.ui.geometry.Offset) -> Unit = { change, amount ->
+    val holdNow by rememberUpdatedState(onHold)
+    val haptic = androidx.compose.ui.platform.LocalHapticFeedback.current
+    return pointerInput(key) {
+        var moved = 0f
+        detectDragGesturesAfterLongPress(
+            onDragStart = {
+                moved = 0f
+                haptic.performHapticFeedback(androidx.compose.ui.hapticfeedback.HapticFeedbackType.LongPress)
+                r.start(key)
+            },
+            onDragEnd = {
+                r.stop()
+                if (moved < viewConfiguration.touchSlop) holdNow()
+            },
+            onDragCancel = { r.stop() },
+        ) { change, amount ->
             change.consume()
+            moved += kotlin.math.abs(amount.x) + kotlin.math.abs(amount.y)
             r.peers = peersNow
             r.onSwap = swapNow
             r.top += amount.y
             r.moved()
         }
-        if (afterHold) {
-            detectDragGesturesAfterLongPress(onDragStart = { r.start(key) }, onDragEnd = { r.stop() }, onDragCancel = { r.stop() }, onDrag = onDrag)
-        } else {
-            detectDragGestures(onDragStart = { r.start(key) }, onDragEnd = { r.stop() }, onDragCancel = { r.stop() }, onDrag = onDrag)
-        }
     }
-}
-
-/** ≡ handle: drag it up or down; the row swaps places with a neighbour ([peers]) as you pass over it. */
-@Composable
-private fun DragHandle(r: Reorder, key: String, peers: List<String>, onSwap: (String, String) -> Unit) {
-    Icon(
-        Icons.Filled.Menu, contentDescription = "Drag to reorder",
-        tint = MaterialTheme.colorScheme.onSurfaceVariant,
-        modifier = Modifier.size(40.dp).reorderable(r, key, peers, false, onSwap).padding(8.dp),
-    )
 }
 
 /** Address as a QR code so someone can scan it to pay you. */
@@ -2255,6 +2259,10 @@ private fun SettingsTab(
 
     var open by rememberSaveable { mutableStateOf<String?>(null) }
     fun toggle(id: String) { open = if (open == id) null else id }
+    // Arrived from Home's "Update available": open Updates straight away.
+    LaunchedEffect(SelfUpdate.openInSettings) {
+        if (SelfUpdate.openInSettings) { open = "updates"; SelfUpdate.openInSettings = false }
+    }
 
     Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(horizontal = 16.dp)) {
         SettingsSection("General") {
@@ -2288,6 +2296,13 @@ private fun SettingsTab(
             }
             if (alerts) {
                 RadioRow(instant, "Instant", "30 s") { setInstant(true) }
+                if (instant) {
+                    // Android insists on a small notification while instant alerts run; it can be switched off there.
+                    TextButton(onClick = { runCatching { context.startActivity(Alerts.watchChannelSettings(context)) } },
+                        contentPadding = PaddingValues(start = 36.dp)) {
+                        Text("Hide the \"running\" notification", style = MaterialTheme.typography.bodySmall)
+                    }
+                }
                 RadioRow(!instant, "Battery saver", "15 min · 30 s charging") { setInstant(false) }
                 Label("Minimum")
                 ChipRow(listOf(0 to "Any amount", 1 to "1 USDT", 10 to "10 USDT", 100 to "100 USDT"), alertMin) { alertMin = it; store.alertMin = it }

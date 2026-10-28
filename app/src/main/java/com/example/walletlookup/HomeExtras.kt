@@ -58,52 +58,6 @@ fun OtherTokensCard(tokens: List<TokenBalance>) {
     }
 }
 
-/** Thin line of the saved-wallets total over the last 7 or 30 days. Tap the range to switch. */
-@Composable
-fun ValueChart(points: List<Pair<Long, BigDecimal>>) {
-    var days by remember { mutableIntStateOf(7) }
-    val since = System.currentTimeMillis() - days * 24L * 3_600_000L
-    val shown = points.filter { it.first >= since }.sortedBy { it.first }
-    if (shown.size < 2) return
-    val line = MaterialTheme.colorScheme.onSurfaceVariant
-    Column {
-        Canvas(Modifier.fillMaxWidth().height(56.dp)) {
-            val minT = shown.first().first.toFloat()
-            val spanT = (shown.last().first - shown.first().first).coerceAtLeast(1).toFloat()
-            val values = shown.map { it.second.toFloat() }
-            val minV = values.min()
-            val spanV = (values.max() - minV).takeIf { it > 0f } ?: 1f
-            val path = Path()
-            shown.forEachIndexed { i, (t, v) ->
-                val x = (t - minT) / spanT * size.width
-                val y = size.height - (v.toFloat() - minV) / spanV * (size.height - 4f) - 2f
-                if (i == 0) path.moveTo(x, y) else path.lineTo(x, y)
-            }
-            // Soft grey fill under the line.
-            val fill = Path().apply { addPath(path); lineTo(size.width, size.height); lineTo(0f, size.height); close() }
-            drawPath(fill, androidx.compose.ui.graphics.Brush.verticalGradient(listOf(line.copy(alpha = 0.18f), androidx.compose.ui.graphics.Color.Transparent)))
-            drawPath(path, line, style = Stroke(width = 1.5.dp.toPx(), cap = StrokeCap.Round))
-            drawCircle(line, 2.5.dp.toPx(), Offset(size.width, size.height - (values.last() - minV) / spanV * (size.height - 4f) - 2f))
-        }
-        Row(Modifier.fillMaxWidth().padding(top = 4.dp), horizontalArrangement = Arrangement.spacedBy(14.dp)) {
-            val hi = shown.maxOf { it.second }
-            val lo = shown.minOf { it.second }
-            listOf(7 to "7D", 30 to "30D").forEach { (d, label) ->
-                Text(
-                    label,
-                    style = MaterialTheme.typography.labelSmall,
-                    fontWeight = if (days == d) FontWeight.Bold else FontWeight.Normal,
-                    color = if (days == d) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier.clickable { days = d },
-                )
-            }
-            Spacer(Modifier.weight(1f))
-            Text("High " + hideable(money(hi)) + "  ·  Low " + hideable(money(lo)), style = MaterialTheme.typography.labelSmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant)
-        }
-    }
-}
-
 @Composable
 private fun SectionHeader(title: String, action: String? = null, onAction: () -> Unit = {}) {
     Row(Modifier.fillMaxWidth().padding(bottom = 6.dp), verticalAlignment = androidx.compose.ui.Alignment.CenterVertically) {
@@ -111,36 +65,6 @@ private fun SectionHeader(title: String, action: String? = null, onAction: () ->
         if (action != null) {
             Text(action, style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.onSurfaceVariant,
                 modifier = Modifier.clickable(onClick = onAction).padding(4.dp))
-        }
-    }
-}
-
-/** Your top wallets by value. Tap one to open it. */
-@Composable
-fun WalletsSection(mine: List<SavedAddress>, cache: Map<String, Cached>, onOpen: (String) -> Unit, onSeeAll: () -> Unit) {
-    val byValue = mine.sortedByDescending { cache[it.address]?.totals?.usd ?: BigDecimal.ZERO }
-    val top = (byValue.filter { it.pinned } + byValue.filter { !it.pinned }).take(4)
-    Column {
-        SectionHeader("Your wallets", if (mine.size > top.size) "See all" else null, onSeeAll)
-        Card(Modifier.fillMaxWidth().animateContentSize()) {
-            Column(Modifier.padding(vertical = 6.dp)) {
-                top.forEach { w ->
-                    Row(
-                        Modifier.fillMaxWidth().clickable { onOpen(w.address) }.padding(horizontal = 18.dp, vertical = 10.dp),
-                        verticalAlignment = androidx.compose.ui.Alignment.CenterVertically,
-                    ) {
-                        NetworkIcon(labelOf(w.address), 30.dp)
-                        Spacer(Modifier.width(12.dp))
-                        Column(Modifier.weight(1f)) {
-                            Text(w.name, maxLines = 1)
-                            // Folder first, so "Bybit · Tron" and "Trust Wallet · Tron" are easy to tell apart.
-                            Text((if (w.group.isNotBlank()) w.group + " · " else "") + labelOf(w.address),
-                                style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1)
-                        }
-                        Text(cache[w.address]?.let { hideable(money(it.totals.usd)) } ?: "—")
-                    }
-                }
-            }
         }
     }
 }
@@ -237,7 +161,8 @@ fun RecentTxSection(
                                     ExchangeBadge(it, 16.dp)
                                     Spacer(Modifier.width(6.dp))
                                 }
-                                Text(tr(if (t.incoming) "From" else "To") + " " + (other ?: net), maxLines = 1,
+                                // No other address (a fee or a contract call): just say which way it went.
+                                Text(if (other != null) fromTo(t.incoming, other) else tr(if (t.incoming) "Received" else "Sent"), maxLines = 1,
                                     overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis, fontWeight = FontWeight.Medium)
                             }
                             // Which of your wallets it was, then when.

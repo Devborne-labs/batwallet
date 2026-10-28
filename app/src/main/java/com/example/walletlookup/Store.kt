@@ -102,8 +102,11 @@ class Store(context: Context) {
         set(v) = prefs.edit().putInt("lock_timeout", v).apply()
 
     /** Payments the background alerts detected, newest first (kept per wallet, last 100). */
-    fun addActivity(address: String, entries: List<Seen>) {
-        val all = (entries + loadActivity(address)).take(100)
+    fun addActivity(address: String, entries: List<Seen>) = saveActivity(address, entries + loadActivity(address))
+
+    /** Replaces the wallet's detected payments (e.g. after filling in details found later). */
+    fun saveActivity(address: String, list: List<Seen>) {
+        val all = list.take(100)
         val arr = JSONArray()
         all.forEach {
             arr.put(JSONObject().put("sym", it.symbol).put("net", it.network).put("amt", it.amount.toPlainString()).put("t", it.time)
@@ -181,6 +184,11 @@ class Store(context: Context) {
 
     /** Last known USD → currency rate, so values show instantly offline. */
     /** USDT became the main currency in 16.3: switch once to it, after that your own choice stays. */
+    /** The Home chart was removed in 17.2: drop the totals it kept recording. */
+    fun dropChartData() {
+        if (prefs.contains("total_points")) prefs.edit().remove("total_points").remove("total_points_set").apply()
+    }
+
     fun switchToUsdtOnce() {
         if (prefs.getBoolean("usdt_default_done", false)) return
         prefs.edit().putString("currency", Fiat.USDT.name).putFloat("currency_rate", 1f).putBoolean("usdt_default_done", true).apply()
@@ -286,30 +294,6 @@ class Store(context: Context) {
     var priceSource: PriceSource
         get() = runCatching { PriceSource.valueOf(prefs.getString("prices", PriceSource.AUTO.name)!!) }.getOrDefault(PriceSource.AUTO)
         set(v) = prefs.edit().putString("prices", v.name).apply()
-
-    /**
-     * Total-value history for the chart: one point per hour at most, last 120 days. [wallets] identifies the set
-     * of wallets the total covers; when you add or remove a wallet the chart starts over, otherwise it would show
-     * a fake jump that is really just a new wallet.
-     */
-    fun addTotalPoint(usd: BigDecimal, wallets: String) {
-        val now = System.currentTimeMillis()
-        if (prefs.getString("total_points_set", null) != wallets) {
-            prefs.edit().putString("total_points_set", wallets).putString("total_points", "[]").apply()
-        }
-        val pts = loadTotalPoints().toMutableList()
-        if (pts.isNotEmpty() && now - pts.last().first < 3_600_000L) pts[pts.lastIndex] = pts.last().first to usd
-        else pts += now to usd
-        val kept = pts.filter { now - it.first < 120L * 24 * 3_600_000L }
-        val arr = JSONArray()
-        kept.forEach { (t, v) -> arr.put(JSONArray().put(t).put(v.toPlainString())) }
-        prefs.edit().putString("total_points", arr.toString()).apply()
-    }
-
-    fun loadTotalPoints(): List<Pair<Long, BigDecimal>> = runCatching {
-        val arr = JSONArray(prefs.getString("total_points", "[]"))
-        (0 until arr.length()).map { arr.getJSONArray(it).let { p -> p.getLong(0) to BigDecimal(p.getString(1)) } }
-    }.getOrDefault(emptyList())
 
     /** Calls [listener] with the address whenever its saved balances change (e.g. after a payment alert). */
     fun onCacheChanged(listener: (String) -> Unit): SharedPreferences.OnSharedPreferenceChangeListener {

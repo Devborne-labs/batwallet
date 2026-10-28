@@ -94,3 +94,9 @@ fun TipsDialog(tips: List<String>, onDone: () -> Unit, onSkipAll: () -> Unit) {
         dismissButton = { TextButton(onClick = onSkipAll) { Text(tr("Skip tips")) } },
     )
 }
+
+/** "From X" / "To X" in the chosen language's word order (Hindi puts the word after: "X से", "X को"). */
+fun fromTo(incoming: Boolean, who: String): String {
+    val word = tr(if (incoming) "From" else "To")
+    return if (I18n.lang == "hi") "$who $word" else "$word $who"
+}

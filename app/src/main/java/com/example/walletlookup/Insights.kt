@@ -561,7 +561,7 @@ private fun scamDatabase(a: String, type: AddrType): Check? = try {
             else Check(Level.GOOD, "Not marked as scam", "No scam mark on Tonapi.")
         }
         AddrType.LIGHTNING, AddrType.BNB_BEACON -> null
-        else -> Check(Level.INFO, "No scam database for ${type.label}",
+        else -> Check(Level.INFO, tr("No scam database for") + " " + type.label,
             "Free scam lists don't cover ${type.label} yet. Rely on the other checks and only send to people you trust.")
     }
 } catch (e: Exception) {

@@ -42,6 +42,8 @@ object SelfUpdate {
     }
 
     var state by mutableStateOf<State>(State.Idle)
+    /** Set by Home's "Update available" line so Settings opens its Updates section. */
+    var openInSettings by mutableStateOf(false)
     /** The version being installed, for the progress dialog's title. */
     var version by mutableStateOf("")
         private set

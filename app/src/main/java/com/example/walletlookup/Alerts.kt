@@ -127,6 +127,17 @@ object Alerts {
         wm.enqueueUniquePeriodicWork(DAILY, ExistingPeriodicWorkPolicy.UPDATE, req)
     }
 
+    /** Android's own page for the "Instant alerts running" notification, where it can be switched off. */
+    fun watchChannelSettings(context: Context): Intent =
+        Intent(android.provider.Settings.ACTION_CHANNEL_NOTIFICATION_SETTINGS)
+            .putExtra(android.provider.Settings.EXTRA_APP_PACKAGE, context.packageName)
+            .putExtra(android.provider.Settings.EXTRA_CHANNEL_ID, WATCH_CHANNEL)
+            .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+
+    fun hideWatchIntent(context: Context): android.app.PendingIntent =
+        android.app.PendingIntent.getActivity(context, 77, watchChannelSettings(context),
+            android.app.PendingIntent.FLAG_IMMUTABLE or android.app.PendingIntent.FLAG_UPDATE_CURRENT)
+
     fun createChannels(context: Context) {
         val nm = context.getSystemService(NotificationManager::class.java)
         nm.createNotificationChannel(
@@ -211,6 +222,58 @@ object Alerts {
         }
     }
 
+    private val STABLES = setOf("USDT", "USDC")
+    private const val DAY_MS = 24 * 3_600_000L
+    private val lastFill = HashMap<String, Long>()
+
+    /**
+     * The transfer behind a balance change: same network, coin, direction and exact amount, made up to 2 hours before
+     * it was noticed (or just after), and not already used for another entry ([taken] transaction IDs).
+     */
+    private fun matchTransfer(recent: List<Pair<String, Transfer>>, sym: String, net: String, diff: BigDecimal,
+                              noticed: Long, taken: Set<String>): Transfer? =
+        recent.firstOrNull { (n, t) ->
+            n == net && t.symbol.equals(sym, true) && t.incoming == (diff.signum() > 0) &&
+                t.amount.compareTo(diff.abs()) == 0 && (t.hash == null || t.hash !in taken) &&
+                (t.time <= 0 || t.time in noticed - 2 * 3_600_000L..noticed + 10 * 60_000L)
+        }?.second
+
+    /**
+     * Payments noticed before their transaction could be found (the free node hadn't caught up, or the lookup failed)
+     * get their sender, receiver and transaction ID filled in on later checks, for up to a day; at most every 2 minutes.
+     */
+    private suspend fun fillMissingDetails(store: Store, w: SavedAddress) {
+        val now = System.currentTimeMillis()
+        // Fee entries saved by older versions (coin drop next to a stablecoin send): drop them.
+        val saved = store.loadActivity(w.address)
+        val acts = saved.filterNot { s ->
+            s.hash == null && s.amount.signum() < 0 && s.symbol !in STABLES && saved.any { o ->
+                o.network == s.network && o.symbol in STABLES && o.amount.signum() < 0 && kotlin.math.abs(o.time - s.time) < 2 * 3_600_000L
+            }
+        }
+        if (acts.size != saved.size) store.saveActivity(w.address, acts)
+        if (acts.none { it.hash == null && now - it.time < DAY_MS }) return
+        if (now - (lastFill[w.address] ?: 0L) < 2 * 60_000L) return
+        lastFill[w.address] = now
+        val recent = try {
+            history(w.address, limit = 25).flatMap { h -> h.items.map { h.network to it } }
+        } catch (e: CancellationException) {
+            throw e
+        } catch (_: Exception) {
+            return
+        }
+        val taken = acts.mapNotNull { it.hash }.toMutableSet()
+        var changed = false
+        val updated = acts.map { s ->
+            if (s.hash != null || now - s.time >= DAY_MS) return@map s
+            val m = matchTransfer(recent, s.symbol, s.network, s.amount, s.time, taken) ?: return@map s
+            m.hash?.let { taken += it }
+            changed = true
+            s.copy(time = m.time.takeIf { it > 0 } ?: s.time, hash = m.hash, from = m.from, to = m.to)
+        }
+        if (changed) store.saveActivity(w.address, updated)
+    }
+
     /** Compare every saved wallet with its last known balances and notify about any change. */
     suspend fun checkWallets(context: Context) = checking.withLock {
         val store = Store(context)
@@ -238,6 +301,7 @@ object Alerts {
             store.saveSnapshot(w.address, (old ?: emptyMap()) + fresh)
             warnLowGas(context, store, w, fresh)
             if (old == null) continue // first check: just remember the starting balances
+            fillMissingDetails(store, w)
 
             val changes = fresh.mapNotNull { (key, now) ->
                 val before = old[key] ?: return@mapNotNull null
@@ -269,12 +333,21 @@ object Alerts {
             } catch (_: Exception) {
                 emptyList()
             }
-            store.addActivity(w.address, changes.map { (key, diff) ->
+            val taken = store.loadActivity(w.address).mapNotNull { it.hash }.toMutableSet()
+            val matches = changes.associate { (key, diff) ->
                 val (sym, net) = key.split("|", limit = 2)
-                val match = recent.firstOrNull { (n, t) ->
-                    n == net && t.symbol.equals(sym, true) && t.incoming == (diff.signum() > 0) &&
-                        t.amount.compareTo(diff.abs()) == 0
-                }?.second
+                key to matchTransfer(recent, sym, net, diff, now, taken)?.also { m -> m.hash?.let { taken += it } }
+            }
+            // The coin dropping a little while a stablecoin was sent on the same network is that send's fee,
+            // not a payment of its own: leave it out (it was listed as a separate "sent" before).
+            val fees = changes.filter { (key, diff) ->
+                val (sym, net) = key.split("|", limit = 2)
+                diff.signum() < 0 && sym !in STABLES && matches[key] == null &&
+                    changes.any { (k2, d2) -> k2 != key && k2.substringAfter("|") == net && d2.signum() < 0 && k2.substringBefore("|") in STABLES }
+            }.map { it.first }.toSet()
+            store.addActivity(w.address, changes.filter { it.first !in fees }.map { (key, diff) ->
+                val (sym, net) = key.split("|", limit = 2)
+                val match = matches[key]
                 Seen(sym, net, diff, match?.time?.takeIf { it > 0 } ?: now, match?.hash, match?.from, match?.to)
             })
 
@@ -284,7 +357,7 @@ object Alerts {
             // so only incoming payments alert.
             val exchange = isExchangeWallet(w.address, w.group, w.name)
             val worth = changes.filter { (key, diff) ->
-                (!exchange || diff.signum() > 0) &&
+                key !in fees && (!exchange || diff.signum() > 0) &&
                     (if (key.startsWith("USDT|")) diff.abs() >= min else min.signum() == 0)
             }
             if (worth.isEmpty()) continue
@@ -366,12 +439,18 @@ class WatchService : Service() {
         }
         Alerts.createChannels(this)
         val count = store.loadAddresses().size
+        // Android requires a notification while this runs; keep it as quiet as possible: no text, no sound, not on
+        // the lock screen, swipe-away. "Hide" opens Android's switch for this one notification (alerts keep working).
         val n = NotificationCompat.Builder(this, Alerts.WATCH_CHANNEL)
             .setSmallIcon(R.drawable.ic_stat_bat)
-            .setContentTitle("Instant alerts on")
-            .setContentText("Watching $count wallet${if (count == 1) "" else "s"} for payments")
-            .setOngoing(true)
+            .setContentTitle("Batwallet")
+            .setSilent(true)
+            .setShowWhen(false)
+            .setPriority(NotificationCompat.PRIORITY_MIN)
+            .setVisibility(NotificationCompat.VISIBILITY_SECRET)
+            .setOngoing(false)
             .setContentIntent(Alerts.openAppIntent(this))
+            .addAction(0, tr("Hide"), Alerts.hideWatchIntent(this))
             .build()
         val type = if (Build.VERSION.SDK_INT >= 34) ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE else 0
         ServiceCompat.startForeground(this, 7, n, type)

@@ -365,7 +365,7 @@ private fun TransferRow(t: Transfer, network: String, names: Map<String, String>
                         Spacer(Modifier.width(6.dp))
                     }
                     Text(
-                        tr(if (t.incoming) "From" else "To") + " " + (saved ?: exchange ?: other?.let(::tiny) ?: "—"),
+                        fromTo(t.incoming, saved ?: exchange ?: other?.let(::tiny) ?: "—"),
                         fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis,
                     )
                 }
