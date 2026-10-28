@@ -450,6 +450,8 @@ private fun App(
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     var tab by rememberSaveable { mutableIntStateOf(TAB_HOME) }
+    // Which of Wallets (0) / Contacts (1) the Wallets tab shows.
+    var walletsPage by rememberSaveable { mutableIntStateOf(0) }
     var address by rememberSaveable { mutableStateOf("") }
     var refresh by remember { mutableIntStateOf(0) }
     var loading by remember { mutableStateOf(false) }
@@ -652,13 +654,14 @@ private fun App(
         for (w in mine) {
             try {
                 history(w.address, activeNetworks(cache[w.address]?.results.orEmpty()), limit = 10)
-                    .forEach { h -> h.items.forEach { all += Triple(w.address, h.network, it) } }
+                    // Exchange wallets (Bybit, Binance…): only money coming in; going out is the exchange sweeping it.
+                    .forEach { h -> h.items.filter { it.incoming || !w.onExchange }.forEach { all += Triple(w.address, h.network, it) } }
             } catch (e: CancellationException) {
                 throw e
             } catch (_: Exception) {
             }
             // Only alert entries with a transaction ID: ones the alerts couldn't match have no details to open.
-            store.loadActivity(w.address).filter { it.hash != null }.forEach { s ->
+            store.loadActivity(w.address).filter { it.hash != null && (it.amount.signum() > 0 || !w.onExchange) }.forEach { s ->
                 val incoming = s.amount.signum() > 0
                 all += Triple(w.address, s.network, Transfer(
                     incoming, s.amount.abs(), if (incoming) s.from else s.to, s.time, null, s.hash, s.from, s.to, s.symbol,
@@ -891,14 +894,21 @@ private fun App(
         },
     ) { pad ->
         // Swipe left/right between Home, Wallets and Settings (the bottom bar and the pages stay in step).
-        val pager = rememberPagerState(initialPage = tab) { 3 }
-        LaunchedEffect(tab) { if (pager.currentPage != tab) pager.animateScrollToPage(tab) }
-        SettleHalfway(pager)
+        // Four pages in one row: Home, Wallets, Contacts, Settings. Every swipe moves exactly one page (Wallets and
+        // Contacts used to be a pager inside this one, and handing a swipe from one to the other made it stutter).
+        fun pageOf(t: Int) = when (t) { TAB_HOME -> 0; TAB_WALLETS -> 1 + walletsPage; else -> 3 }
+        val pager = rememberPagerState(initialPage = pageOf(tab)) { 4 }
+        LaunchedEffect(tab, walletsPage) {
+            val target = pageOf(tab)
+            if (pager.currentPage != target) pager.animateScrollToPage(target)
+        }
         LaunchedEffect(pager) {
             snapshotFlow { pager.settledPage }.collect { p ->
-                if (p != tab) {
+                if (p == 1 || p == 2) walletsPage = p - 1
+                val t = when (p) { 0 -> TAB_HOME; 1, 2 -> TAB_WALLETS; else -> TAB_SETTINGS }
+                if (t != tab) {
                     if (fromWallets) { fromWallets = false; address = "" }
-                    tab = p
+                    tab = t
                 }
             }
         }
@@ -908,11 +918,9 @@ private fun App(
             // While a wallet page is open, swiping is off so it can't be left half-way.
             userScrollEnabled = address.isEmpty(),
             beyondViewportPageCount = 1,
-            // A short, quick swipe is enough to change page (the default needs half the screen, which felt stuck).
-            flingBehavior = PagerDefaults.flingBehavior(state = pager, snapPositionalThreshold = 0.2f),
         ) { page ->
         Column(Modifier.fillMaxSize()) {
-            if (page == TAB_SETTINGS) {
+            if (page == 3) {
                 Text(
                     "Settings",
                     style = MaterialTheme.typography.titleLarge,
@@ -921,7 +929,7 @@ private fun App(
                 )
             }
             when (page) {
-                TAB_HOME -> HomeTab(
+                0 -> HomeTab(
                     onOpenUpdate = { SelfUpdate.openInSettings = true; tab = TAB_SETTINGS },
                     saved = saved,
                     cache = cache,
@@ -959,11 +967,14 @@ private fun App(
                     onOpen = { address = it },
                     onSeeAll = { tab = TAB_WALLETS },
                     platform = remember(address, homeHistory) { platformOf(address, homeHistory) },
-                    recentTx = recentTx,
+                    // Also applied to the saved list, so sends from exchange wallets disappear straight away.
+                    recentTx = recentTx.filter { (w, _, t) -> t.incoming || saved.firstOrNull { it.address == w }?.onExchange != true },
                     onOpenTx = { net, t -> homeTx = net to t },
                     onClearRecent = { store.clearRecent(); recent = emptyList() },
                 )
-                TAB_WALLETS -> WalletsTab(
+                1, 2 -> WalletsTab(
+                    subPage = page - 1,
+                    onSubPage = { walletsPage = it },
                     saved = saved,
                     cache = cache,
                     syncing = syncing,
@@ -1285,7 +1296,9 @@ private fun HomeTab(
                     hiddenAtFirst = exchangeId?.ownWallet == true || savedWallet?.onExchange == true)
             }
             if (!tokens.isNullOrEmpty()) item { OtherTokensCard(tokens) }
-            if (type != null) item { SafetyCard(safety, safetyLoading, twin, savedWallet, platform) }
+            // Not activated: every network answered and none shows a balance or any activity.
+            val unused = results.isNotEmpty() && results.all { it.error == null && !it.active }
+            if (type != null) item { SafetyCard(safety, safetyLoading, twin, savedWallet, platform, unused) }
         }
     }
 
@@ -1441,13 +1454,6 @@ private fun BalanceCard(
                     }
                 }
             }
-            // Holds USDT but not enough of the network's coin to pay the fee for sending it.
-            // (Not for exchange wallets: the exchange pays the fees.)
-            ok.filter { !exchange && lowGas(it.network, it.native, it.usdt) }.forEach { r ->
-                Spacer(Modifier.height(10.dp))
-                Text(tr("Low") + " ${r.nativeSym} · " + tr("may not cover the fee to send USDT"),
-                    style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.error)
-            }
             if (failed.isNotEmpty()) {
                 Spacer(Modifier.height(10.dp))
                 Text(tr("Couldn't reach:") + " " + failed.joinToString(", ") { it.network },
@@ -1460,6 +1466,9 @@ private fun BalanceCard(
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun WalletsTab(
+    /** 0 = Wallets, 1 = Contacts (each is its own page of the main swipe row). */
+    subPage: Int,
+    onSubPage: (Int) -> Unit,
     saved: List<SavedAddress>,
     cache: Map<String, Cached>,
     syncing: Set<String>,
@@ -1494,10 +1503,7 @@ private fun WalletsTab(
     var editing by remember { mutableStateOf<SavedAddress?>(null) }
     var deleting by remember { mutableStateOf<SavedAddress?>(null) }
     var collapsed by remember { mutableStateOf(collapsedInit) }
-    // Wallets and Contacts are two pages: tap the tabs or swipe between them.
-    val sub = rememberPagerState { 2 }
-    SettleHalfway(sub)
-    val showContacts = sub.currentPage == 1
+    val showContacts = subPage == 1
     var renaming by remember { mutableStateOf<String?>(null) }
     // Drag handles only show in "Edit order" mode (from the ⋯ menu), so normal rows stay clean.
     var moreMenu by remember { mutableStateOf(false) }
@@ -1549,7 +1555,7 @@ private fun WalletsTab(
         return Page(shown, orderedNames, (orderedNames + grouped.keys.filter { it.isBlank() }).associateWith { grouped.getValue(it) }, searchable)
     }
     val pages = listOf(page(false), page(true))
-    val current = pages[sub.currentPage]
+    val current = pages[subPage]
 
     /** Dragging while sorted by value or name first makes what's on screen your own order, then moves from there. */
     fun adoptShownOrder(p: Page) {
@@ -1610,8 +1616,8 @@ private fun WalletsTab(
             }
             Spacer(Modifier.height(6.dp))
             Row(Modifier.fillMaxWidth()) {
-                UnderlineTab("Wallets", sub.currentPage == 0, Modifier.weight(1f)) { scope.launch { sub.animateScrollToPage(0) } }
-                UnderlineTab("Contacts", sub.currentPage == 1, Modifier.weight(1f)) { scope.launch { sub.animateScrollToPage(1) } }
+                UnderlineTab("Wallets", subPage == 0, Modifier.weight(1f)) { onSubPage(0) }
+                UnderlineTab("Contacts", subPage == 1, Modifier.weight(1f)) { onSubPage(1) }
             }
             HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f))
             if (current.searchable && !selecting) {
@@ -1626,12 +1632,8 @@ private fun WalletsTab(
         }
 
         PullToRefreshBox(isRefreshing = syncing.isNotEmpty(), onRefresh = onRefreshAll, modifier = Modifier.fillMaxSize()) {
-            // Swiping past the last page carries on to the next app tab (Home / Settings).
-            HorizontalPager(
-                state = sub, modifier = Modifier.fillMaxSize(), userScrollEnabled = !selecting,
-                beyondViewportPageCount = 1, // Contacts is ready before you swipe to it
-                flingBehavior = PagerDefaults.flingBehavior(state = sub, snapPositionalThreshold = 0.2f),
-            ) { p ->
+            run {
+                val p = subPage
                 val pg = pages[p]
                 val listState = rememberLazyListState()
                 val drag = remember(listState) { Reorder(listState) }
@@ -1984,21 +1986,6 @@ private class Reorder(val list: LazyListState) {
         settleFrom = cur.offset
         settleWait = 0
         onSwap(k, target.key as String)
-    }
-}
-
-/**
- * A swipe handed from the inner Wallets/Contacts pager to the outer one could stop between two pages. When no swipe
- * is going on and a pager sits part-way, finish the move to the nearest page.
- */
-@Composable
-private fun SettleHalfway(pager: androidx.compose.foundation.pager.PagerState) {
-    LaunchedEffect(pager) {
-        snapshotFlow { pager.isScrollInProgress }.collect { scrolling ->
-            if (!scrolling && kotlin.math.abs(pager.currentPageOffsetFraction) > 0.001f) {
-                pager.animateScrollToPage(pager.currentPage)
-            }
-        }
     }
 }
 

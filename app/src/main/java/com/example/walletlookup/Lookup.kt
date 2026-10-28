@@ -990,15 +990,6 @@ fun shortDate(epochSeconds: Long): String {
 /** A transfer address that imitates one of yours (same start and end, different middle). */
 fun lookalikeOf(address: String): SavedAddress? = lookalike(address, lookalikeSource)
 
-/**
- * True when a wallet holds USDT but too little of the network's coin to pay the fee for sending it
- * (Tron ~15 TRX, BSC 0.0005 BNB, Ethereum 0.002 ETH).
- */
-fun lowGas(network: String, native: BigDecimal, usdt: BigDecimal): Boolean {
-    if (usdt.signum() <= 0) return false
-    val min = when (network) { "Tron" -> "15"; "BSC" -> "0.0005"; "Ethereum" -> "0.002"; else -> return false }
-    return native < BigDecimal(min)
-}
 // ===================== Smart paste / text scan =====================
 
 /** Network named in a message ("USDT BEP20", "send on Polygon"), used to pick the network for a 0x address. */

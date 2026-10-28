@@ -206,22 +206,6 @@ object Alerts {
         }
     }
 
-    /** Warns (at most once a day) when a wallet holds USDT but too little TRX / BNB / ETH to pay the fee to send it. */
-    private fun warnLowGas(context: Context, store: Store, w: SavedAddress, fresh: Map<String, BigDecimal>) {
-        if (isExchangeWallet(w.address, w.group, w.name)) return // the exchange pays its own fees
-        for ((net, sym) in listOf("Tron" to "TRX", "BSC" to "BNB", "Ethereum" to "ETH")) {
-            val usdt = fresh["USDT|$net"] ?: continue
-            val native = fresh["$sym|$net"] ?: continue
-            if (!lowGas(net, native, usdt)) continue
-            val key = "${w.address}|$net"
-            val now = System.currentTimeMillis()
-            if (now - store.gasWarnedAt(key) < 24 * 3_600_000L) continue
-            store.setGasWarned(key, now)
-            notify(context, key.hashCode(), tr("Low") + " $sym · " + walletLabel(w),
-                tr("may not cover the fee to send USDT") + " (${fmt(native)} $sym)")
-        }
-    }
-
     private val STABLES = setOf("USDT", "USDC")
     private const val DAY_MS = 24 * 3_600_000L
     private val lastFill = HashMap<String, Long>()
@@ -299,7 +283,6 @@ object Alerts {
             val old = store.loadSnapshot(w.address)
             // Keep old values for networks that failed this time, so they don't look like changes later.
             store.saveSnapshot(w.address, (old ?: emptyMap()) + fresh)
-            warnLowGas(context, store, w, fresh)
             if (old == null) continue // first check: just remember the starting balances
             fillMissingDetails(store, w)
 
@@ -345,7 +328,9 @@ object Alerts {
                 diff.signum() < 0 && sym !in STABLES && matches[key] == null &&
                     changes.any { (k2, d2) -> k2 != key && k2.substringAfter("|") == net && d2.signum() < 0 && k2.substringBefore("|") in STABLES }
             }.map { it.first }.toSet()
-            store.addActivity(w.address, changes.filter { it.first !in fees }.map { (key, diff) ->
+            // Exchange wallets: money leaving is the exchange sweeping it, not a payment of yours, so it isn't kept.
+            val exchangeWallet = isExchangeWallet(w.address, w.group, w.name)
+            store.addActivity(w.address, changes.filter { it.first !in fees && (!exchangeWallet || it.second.signum() > 0) }.map { (key, diff) ->
                 val (sym, net) = key.split("|", limit = 2)
                 val match = matches[key]
                 Seen(sym, net, diff, match?.time?.takeIf { it > 0 } ?: now, match?.hash, match?.from, match?.to)

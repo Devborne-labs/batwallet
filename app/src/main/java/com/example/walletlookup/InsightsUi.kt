@@ -5,6 +5,7 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.unit.sp
@@ -68,6 +69,8 @@ fun SafetyCard(
     twin: SavedAddress?,
     savedWallet: SavedAddress?,
     platform: Platform?,
+    /** Every network answered and the address has no balance and no activity anywhere: not activated yet. */
+    unused: Boolean = false,
 ) {
     var open by remember { mutableStateOf(false) }
     val badCheck = safety?.checks?.firstOrNull { it.level == Level.BAD }
@@ -85,62 +88,79 @@ fun SafetyCard(
         else -> "No red flags found"
     }
     val red = MaterialTheme.colorScheme.error
+    val amber = Color(0xFFE0A100)
+    // One colour and symbol per state: red = don't send, amber = never used, green = clean, grey = yours / checking.
+    val notActivated = !danger && savedWallet == null && unused
+    val (tint, symbol, title) = when {
+        danger -> Triple(red, "!", verdict)
+        notActivated -> Triple(amber, "!", tr("Not activated yet"))
+        savedWallet != null -> Triple(MaterialTheme.colorScheme.onSurfaceVariant, "✓", verdict)
+        safety == null -> Triple(MaterialTheme.colorScheme.onSurfaceVariant, "…", verdict)
+        safety.level == Level.WARN -> Triple(amber, "!", verdict)
+        else -> Triple(InGreen, "✓", verdict)
+    }
+    val subtitle = when {
+        twin != null -> "Different address made to look like yours. Don't send money to it."
+        danger -> "Reported as a scam or compromised. Don't send money to this address."
+        notActivated -> "This address has never received or sent anything. Double-check it before sending money."
+        else -> platform?.let { tr("Platform:") + " " + it.how }
+    }
     Card(
-        Modifier.fillMaxWidth().clickable { open = !open },
-        colors = if (danger) CardDefaults.cardColors(containerColor = red.copy(alpha = 0.16f)) else CardDefaults.cardColors(),
+        Modifier.fillMaxWidth().clip(RoundedCornerShape(16.dp)).clickable(enabled = safety != null) { open = !open },
+        shape = RoundedCornerShape(16.dp),
+        colors = CardDefaults.cardColors(containerColor = tint.copy(alpha = 0.13f)),
     ) {
-        Column(Modifier.padding(horizontal = 16.dp, vertical = 12.dp)) {
+        Column(Modifier.padding(16.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
-                if (loading && safety == null) {
-                    CircularProgressIndicator(Modifier.size(14.dp), strokeWidth = 2.dp)
-                    Spacer(Modifier.width(8.dp))
+                Box(Modifier.size(36.dp).background(tint.copy(alpha = 0.22f), CircleShape), contentAlignment = Alignment.Center) {
+                    if (loading && safety == null) CircularProgressIndicator(Modifier.size(16.dp), strokeWidth = 2.dp, color = tint)
+                    else Text(symbol, color = tint, fontWeight = FontWeight.Bold, style = MaterialTheme.typography.titleMedium)
                 }
-                Text(
-                    (if (danger) "⚠  " else "") + verdict,
-                    style = MaterialTheme.typography.titleSmall,
-                    fontWeight = FontWeight.SemiBold,
-                    color = if (danger) red else MaterialTheme.colorScheme.onSurface,
-                    modifier = Modifier.weight(1f),
-                )
+                Spacer(Modifier.width(12.dp))
+                Column(Modifier.weight(1f)) {
+                    Text(title, style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.SemiBold,
+                        color = if (danger) red else MaterialTheme.colorScheme.onSurface)
+                    subtitle?.let {
+                        Text(it, style = MaterialTheme.typography.bodySmall,
+                            color = if (danger) red else MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(top = 2.dp))
+                    }
+                }
                 if (safety != null) {
                     Text(if (open) "Less" else "Details", style = MaterialTheme.typography.labelMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(start = 8.dp))
                 }
-            }
-            if (danger) {
-                Text(
-                    if (twin != null) "Different address made to look like yours. Don't send money to it."
-                    else "Reported as a scam or compromised. Don't send money to this address.",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = red,
-                )
-            }
-            platform?.let {
-                Text("Platform: ${it.how}", style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(top = 2.dp))
             }
             safety?.let { s ->
                 if (!open) {
-                    // Short ticks on one line.
-                    Text(
-                        s.checks.joinToString("   ") { "${icon(it.level)} ${tr(it.title)}" },
-                        style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        maxLines = 2,
-                        overflow = TextOverflow.Ellipsis,
-                        modifier = Modifier.padding(top = 4.dp),
-                    )
+                    // The individual checks as small pills.
+                    @OptIn(androidx.compose.foundation.layout.ExperimentalLayoutApi::class)
+                    androidx.compose.foundation.layout.FlowRow(
+                        Modifier.padding(top = 12.dp),
+                        horizontalArrangement = Arrangement.spacedBy(6.dp),
+                        verticalArrangement = Arrangement.spacedBy(6.dp),
+                    ) {
+                        s.checks.forEach { c ->
+                            Text(
+                                "${icon(c.level)}  ${tr(c.title)}",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = if (c.level == Level.BAD) red else MaterialTheme.colorScheme.onSurface,
+                                modifier = Modifier.clip(RoundedCornerShape(50))
+                                    .background(MaterialTheme.colorScheme.surface.copy(alpha = 0.7f))
+                                    .padding(horizontal = 10.dp, vertical = 5.dp),
+                            )
+                        }
+                    }
                 } else {
                     s.checks.forEach { c ->
-                        Column(Modifier.padding(top = 6.dp)) {
-                            Text("${icon(c.level)} ${tr(c.title)}", style = MaterialTheme.typography.labelLarge,
+                        Column(Modifier.padding(top = 10.dp)) {
+                            Text("${icon(c.level)}  ${tr(c.title)}", style = MaterialTheme.typography.labelLarge,
                                 color = if (c.level == Level.BAD) red else MaterialTheme.colorScheme.onSurface)
                             Text(c.detail, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                         }
                     }
                     Text("A clean result isn't a guarantee. Only send to people you trust.",
                         style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        modifier = Modifier.padding(top = 6.dp))
+                        modifier = Modifier.padding(top = 10.dp))
                 }
             }
         }

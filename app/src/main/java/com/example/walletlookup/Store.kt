@@ -160,9 +160,6 @@ class Store(context: Context) {
         get() = prefs.getLong("recent_tx_at", 0L)
         set(v) = prefs.edit().putLong("recent_tx_at", v).apply()
 
-    /** When a low-fee-coin warning was last shown for [key] (wallet + network), so it comes at most once a day. */
-    fun gasWarnedAt(key: String): Long = prefs.getLong("gas:$key", 0L)
-    fun setGasWarned(key: String, time: Long) = prefs.edit().putLong("gas:$key", time).apply()
 
 
     /** Only notify for USDT changes at least this big (0 = every change, including gas fees). */
