@@ -409,3 +409,8 @@ This address has never received or sent anything. Double-check it before sending
 Platform:	Платформа:	प्लेटफ़ॉर्म:
 Couldn't fully check	Не удалось проверить полностью	पूरी जाँच नहीं हो सकी
 A network didn't answer. Try again in a moment.	Одна из сетей не ответила. Попробуйте чуть позже.	एक नेटवर्क ने जवाब नहीं दिया। थोड़ी देर में फिर कोशिश करें।
+Finding the transaction details	Ищем детали транзакции	लेन-देन का विवरण खोजा जा रहा है
+Payment alerts noticed this from a balance change. Batwallet is matching it to the blockchain; the sender, receiver and transaction ID show up here once found.	Уведомления заметили это по изменению баланса. Batwallet сверяет его с блокчейном; отправитель, получатель и ID транзакции появятся здесь, когда найдутся.	पेमेंट अलर्ट ने इसे बैलेंस बदलने से देखा। Batwallet इसे ब्लॉकचेन से मिला रहा है; भेजने वाला, पाने वाला और लेन-देन ID मिलते ही यहाँ दिखेंगे।
+finding details…	ищем детали…	विवरण खोजा जा रहा है…
+Details not available	Детали недоступны	विवरण उपलब्ध नहीं
+Payment alerts noticed this from a balance change, but the transaction couldn't be matched. Coin transfers (BNB, ETH, POL) can only be traced in the first minutes on free nodes.	Уведомления заметили это по изменению баланса, но транзакцию не удалось найти. Переводы монет (BNB, ETH, POL) на бесплатных узлах можно отследить только в первые минуты.	पेमेंट अलर्ट ने इसे बैलेंस बदलने से देखा, पर लेन-देन नहीं मिल सका। मुफ़्त नोड पर कॉइन ट्रांसफ़र (BNB, ETH, POL) केवल शुरुआती कुछ मिनटों में खोजे जा सकते हैं।

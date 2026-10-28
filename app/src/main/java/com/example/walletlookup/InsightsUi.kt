@@ -520,9 +520,27 @@ internal fun TransactionScreen(
             }
             if (!neutral && t.hash == null && t.from == null && t.to == null) {
                 item {
-                    Text("Noticed from a balance change. The sender, receiver and transaction ID haven't been found yet; " +
-                        "the app keeps searching (also on backup nodes) and fills them in here when found.",
-                        style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    // Still being matched to the blockchain: say so clearly, with a spinner, not as an error.
+                    // After a day it won't be found any more (coin transfers can only be traced for minutes): say that.
+                    val stale = t.time > 0 && System.currentTimeMillis() - t.time > detailsWindowMs(t.symbol)
+                    Card(Modifier.fillMaxWidth().padding(top = 8.dp), shape = RoundedCornerShape(16.dp)) {
+                        Row(Modifier.padding(16.dp), verticalAlignment = Alignment.Top) {
+                            if (stale) Text("i", fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                modifier = Modifier.padding(horizontal = 6.dp))
+                            else CircularProgressIndicator(Modifier.padding(top = 2.dp).size(18.dp), strokeWidth = 2.dp)
+                            Spacer(Modifier.width(12.dp))
+                            Column {
+                                Text(if (stale) "Details not available" else "Finding the transaction details",
+                                    style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.SemiBold)
+                                Text(if (stale) "Payment alerts noticed this from a balance change, but the transaction couldn't be " +
+                                    "matched. Coin transfers (BNB, ETH, POL) can only be traced in the first minutes on free nodes."
+                                else "Payment alerts noticed this from a balance change. Batwallet is matching it to the " +
+                                    "blockchain; the sender, receiver and transaction ID show up here once found.",
+                                    style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    modifier = Modifier.padding(top = 4.dp))
+                            }
+                        }
+                    }
                 }
             }
             t.txUrl?.let { url ->
@@ -564,7 +582,8 @@ private fun SeenRow(s: Seen, onClick: () -> Unit) {
             Spacer(Modifier.width(12.dp))
             Column(Modifier.weight(1f)) {
                 Text(if (incoming) "Received" else "Sent", fontWeight = FontWeight.SemiBold)
-                Text("${s.network} · ${shortDate(s.time / 1000)}", style = MaterialTheme.typography.labelSmall,
+                Text("${s.network} · ${shortDate(s.time / 1000)}" + (if (s.hash == null && System.currentTimeMillis() - s.time < detailsWindowMs(s.symbol)) " · " + tr("finding details…") else ""),
+                    style = MaterialTheme.typography.labelSmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
             Text((if (incoming) "+" else "−") + hideable(transferValue(s.amount.abs(), s.symbol)),

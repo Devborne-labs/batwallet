@@ -97,8 +97,8 @@ suspend fun findTransfers(raw: String, network: String, symbol: String, change: 
     }
 
 /** Plain TRX transfers in and out of [a] from 3 hours before [time] to 15 minutes after (TronGrid; Tronscan as backup). */
-private fun tronCoinWindow(a: String, time: Long): List<Transfer> {
-    val from = time - 3 * 3_600_000L
+private fun tronCoinWindow(a: String, time: Long, lookBackMs: Long = 3 * 3_600_000L): List<Transfer> {
+    val from = time - lookBackMs
     val to = time + 15 * 60_000L
     fun transfer(hash: String, f: String, t: String, sun: Long, ts: Long): Transfer {
         val incoming = t == a
@@ -139,6 +139,64 @@ internal fun tronBase58(hex: String): String {
     while (n.signum() > 0) { val (q, r) = n.divideAndRemainder(base); sb.append(alphabet[r.toInt()]); n = q }
     for (b in bytes + check) { if (b.toInt() == 0) sb.append('1') else break }
     return sb.reverse().toString()
+}
+
+/** Free nodes that keep balances of recent blocks, per network (for tracing coin transfers that just happened). */
+private val COIN_NODES = mapOf(
+    "BSC" to "https://bsc-rpc.publicnode.com",
+    "Ethereum" to "https://ethereum-rpc.publicnode.com",
+    "Polygon" to "https://polygon-bor-rpc.publicnode.com",
+    "Base" to "https://base-rpc.publicnode.com",
+    "Arbitrum" to "https://arb1.arbitrum.io/rpc",
+)
+
+/**
+ * A coin transfer (BNB, ETH, POL) that happened in the last few minutes. These don't appear in transfer logs, and no
+ * free service lists them, so: find the block where the balance last changed (free nodes keep recent balances, about
+ * the last 1,000 blocks) and read that block's transactions. Call it right after the change is noticed.
+ */
+fun recentCoinTransfer(raw: String, network: String, change: java.math.BigDecimal): Transfer? {
+    val url = COIN_NODES[network] ?: return null
+    val a = rawAddress(raw).lowercase()
+    fun rpc(method: String, params: JSONArray): Any {
+        val o = JSONObject(http(url, JSONObject().put("jsonrpc", "2.0").put("id", 1).put("method", method).put("params", params).toString()))
+        if (o.has("error") || !o.has("result")) throw java.io.IOException(o.optJSONObject("error")?.optString("message") ?: "no result")
+        return o.get("result")
+    }
+    fun hex(n: Long) = "0x" + n.toString(16)
+    fun bal(b: Long) = BigInteger((rpc("eth_getBalance", JSONArray().put(a).put(hex(b))) as String).removePrefix("0x"), 16)
+    val latest = BigInteger((rpc("eth_blockNumber", JSONArray()) as String).removePrefix("0x"), 16).toLong()
+    val now = bal(latest)
+    // The furthest block back the node still has a balance for, and that differs from now.
+    var span = 1000L
+    var lo: Long
+    while (true) {
+        lo = latest - span
+        val b = runCatching { bal(lo) }.getOrNull()
+        if (b != null) { if (b == now) return null else break }
+        span /= 2
+        if (span < 16) return null
+    }
+    // Binary search: bal(lo) != now, bal(hi) == now; the change is in block hi.
+    var hi = latest
+    while (hi - lo > 1) { val m = (lo + hi) / 2; if (bal(m) == now) hi = m else lo = m }
+    val block = rpc("eth_getBlockByNumber", JSONArray().put(hex(hi)).put(true)) as JSONObject
+    val incoming = change.signum() > 0
+    val txs = block.getJSONArray("transactions")
+    val tx = (0 until txs.length()).map { txs.getJSONObject(it) }.firstOrNull { t ->
+        val to = t.optString("to").lowercase()
+        val from = t.optString("from").lowercase()
+        BigInteger(t.optString("value", "0x0").removePrefix("0x").ifEmpty { "0" }, 16).signum() > 0 &&
+            (if (incoming) to == a else from == a)
+    } ?: return null
+    val hash = tx.getString("hash")
+    val from = tx.getString("from")
+    val to = tx.optString("to")
+    val value = amount(BigInteger(tx.getString("value").removePrefix("0x"), 16), 18)
+    val ts = BigInteger(block.getString("timestamp").removePrefix("0x"), 16).toLong() * 1000
+    val base = EVM_HIST.firstOrNull { it.name == network }?.txBase
+    val sym = when (network) { "BSC" -> "BNB"; "Polygon" -> "POL"; else -> "ETH" }
+    return Transfer(incoming, value, if (incoming) from else to, ts, base?.plus(hash), hash, from, to, sym)
 }
 
 /** One transfer of exactly [change], else the newest ones up to [time] whose amounts add up to it. */
@@ -389,8 +447,8 @@ private class LogNode(
     }
 }
 private val LOG_NODES = mapOf(
-    // BSC: 5,000 blocks (~40 min) per call, sequential only. Backup takes the same requests.
-    56L to LogNode("https://rpc-bsc.48.club", 5_000, 12, listOf("https://bsc-rpc.publicnode.com"), backupsFullRange = true),
+    // BSC: 5,000 blocks per call. publicnode answers big batches cleanly (48.club rate-limits them), so it leads.
+    56L to LogNode("https://bsc-rpc.publicnode.com", 5_000, 12, listOf("https://rpc-bsc.48.club"), backupsFullRange = true),
     // Sonic: whole chain in a few calls; the backup only small windows (searching around one payment).
     146L to LogNode("https://rpc.soniclabs.com", 10_000_000, 10, listOf("https://sonic.drpc.org")),
     // Polygon: ~5.5 h per call. Backup takes the same requests.
@@ -473,7 +531,9 @@ private fun logHistory(c: EvmHist, a: String, maxRequests: Int = 4 + (LIMIT - 25
     // The window starts small (busy wallets have thousands of transfers an hour) and doubles while little is found.
     var size = 1
     var failures = 0
-    while (!reachedStart && requests < maxRequests && found.size < want) {
+    // About 8 seconds of looking back per visit, so the list shows quickly; Load more and later visits go further.
+    val started = System.currentTimeMillis()
+    while (!reachedStart && requests < maxRequests && found.size < want && (requests == 0 || System.currentTimeMillis() - started < 8_000)) {
         val part = ranges(maxOf(0L, oldest - node.chunk * size), oldest - 1).take(size)
         if (part.isEmpty()) { reachedStart = true; break }
         val before = found.size
@@ -546,7 +606,10 @@ private fun tronHistory(a: String): History {
             o.getString("transaction_id"), o.getString("from"), o.getString("to"),
         )
     }
-    return History("Tron", items)
+    // Plain TRX transfers too, so coin payments show alongside USDT (tiny amounts are poisoning spam, left out).
+    val coins = runCatching { tronCoinWindow(a, System.currentTimeMillis(), lookBackMs = 90L * 86_400_000L) }.getOrDefault(emptyList())
+        .filter { it.amount >= java.math.BigDecimal("0.01") }
+    return History("Tron", (items + coins).sortedByDescending { it.time }.take(LIMIT))
 }
 
 private fun aptosHistory(raw: String): History {

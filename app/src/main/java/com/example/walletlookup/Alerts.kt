@@ -214,6 +214,7 @@ object Alerts {
     private const val DAY_MS = 24 * 3_600_000L
     private const val WEEK_MS = 7 * DAY_MS
     private val lastFill = HashMap<String, Long>()
+    private val searchedAt = java.util.concurrent.ConcurrentHashMap<String, Long>()
 
     /**
      * The transfer behind a balance change: same network, coin, direction and exact amount, made up to 2 hours before
@@ -252,12 +253,13 @@ object Alerts {
         if (acts.none { it.hash == null && now - it.time < WEEK_MS }) return
         if (now - (lastFill[w.address] ?: 0L) < 2 * 60_000L) return
         lastFill[w.address] = now
+        // A failed history request isn't the end: the block search below still runs.
         val recent = try {
             history(w.address, limit = 25).flatMap { h -> h.items.map { h.network to it } }
         } catch (e: CancellationException) {
             throw e
         } catch (_: Exception) {
-            return
+            emptyList()
         }
         val taken = acts.mapNotNull { it.hash }.toMutableSet()
         var changed = false
@@ -266,10 +268,15 @@ object Alerts {
             if (s.hash != null || now - s.time >= WEEK_MS) return@flatMap listOf(s)
             val near = recent.filter { (n, t) -> n == s.network && t.symbol.equals(s.symbol, true) && (t.hash == null || t.hash !in taken) }
             // Recent history first; then a search of the blocks around that time (a few per run).
+            // Each entry gets a block search at most every 10 minutes, so ones that can't be found yet don't use up
+            // the turns of the others (it used to always retry the newest three, and older ones never got a turn).
+            val key = "${w.address}|${s.network}|${s.symbol}|${s.amount.toPlainString()}|${s.time}"
             val found = pickTransfers(near.map { it.second }, s.amount, s.time).ifEmpty {
-                if (searches++ < 3) runCatching { findTransfers(w.address, s.network, s.symbol, s.amount, s.time) }.getOrDefault(emptyList())
-                    .filter { it.hash == null || it.hash !in taken }
-                else emptyList()
+                if (now - (searchedAt[key] ?: 0L) >= 10 * 60_000L && searches++ < 3) {
+                    searchedAt[key] = now
+                    runCatching { findTransfers(w.address, s.network, s.symbol, s.amount, s.time) }.getOrDefault(emptyList())
+                        .filter { it.hash == null || it.hash !in taken }
+                } else emptyList()
             }
             if (found.isEmpty()) return@flatMap listOf(s)
             found.forEach { t -> t.hash?.let { taken += it } }
@@ -353,6 +360,15 @@ object Alerts {
                 key to pickTransfers(recent.filter { (n, t) -> n == net && t.symbol.equals(sym, true) && (t.hash == null || t.hash !in taken) }
                     .map { it.second }, diff, now).also { list -> list.forEach { t -> t.hash?.let { taken += it } } }
             }.filterValues { it.isNotEmpty() }
+            // Coins (BNB, ETH, POL): not in transfer logs, so trace them now, while the node still has the balances.
+            val coins = changes.filter { (key, _) ->
+                key.substringBefore("|") !in STABLES && matches[key] == null && key !in parts
+            }.mapNotNull { (key, diff) ->
+                val net = key.substringAfter("|")
+                kotlinx.coroutines.withTimeoutOrNull(10_000) {
+                    kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) { runCatching { recentCoinTransfer(w.address, net, diff) }.getOrNull() }
+                }?.let { key to it }
+            }.toMap()
             // The coin dropping a little while a stablecoin was sent on the same network is that send's fee,
             // not a payment of its own: leave it out (it was listed as a separate "sent" before).
             val fees = changes.filter { (key, diff) ->
@@ -366,7 +382,7 @@ object Alerts {
                 val (sym, net) = key.split("|", limit = 2)
                 val split = parts[key]
                 if (split != null) split.map { t -> seenOf(sym, net, t, now) }
-                else matches[key].let { m -> listOf(Seen(sym, net, diff, m?.time?.takeIf { it > 0 } ?: now, m?.hash, m?.from, m?.to)) }
+                else (matches[key] ?: coins[key]).let { m -> listOf(Seen(sym, net, diff, m?.time?.takeIf { it > 0 } ?: now, m?.hash, m?.from, m?.to)) }
             }.filter { !exchangeWallet || it.amount.signum() > 0 })
 
             // Respect the "only alert above" setting; small coin moves (gas fees) are skipped when a minimum is set.

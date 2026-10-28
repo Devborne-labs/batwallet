@@ -457,8 +457,13 @@ private fun blockcypher(name: String, coin: String, sym: String, gecko: String, 
 private const val USDT_TRC20 = "TR7NHqjeKQxGTCi8q8ZY4pL8otSzgjLj6t"
 
 private fun tron(a: String, p: Map<String, Double>): ChainResult {
-    val data = JSONObject(http("https://api.trongrid.io/v1/accounts/$a")).optJSONArray("data")
     val explorer = "https://tronscan.org/#/address/$a"
+    // TronGrid rate-limits quick bursts; publicnode's Tron node answers the same balances as a backup.
+    val data = try {
+        JSONObject(http("https://api.trongrid.io/v1/accounts/$a")).optJSONArray("data")
+    } catch (e: Exception) {
+        return tronBackup(a, p, explorer)
+    }
     if (data == null || data.length() == 0) {
         return build("Tron", "TRX", "tron", BigDecimal.ZERO, p, explorer, listOf("USDT (TRC20)" to BigDecimal.ZERO),
             extra = listOf("Status" to "Not activated (no on-chain activity yet)"))
@@ -478,6 +483,33 @@ private fun tron(a: String, p: Map<String, Double>): ChainResult {
         listOf("USDT (TRC20)" to usdt), extra, activity = true)
 }
 
+private fun tronBackup(a: String, p: Map<String, Double>, explorer: String): ChainResult {
+    val node = "https://tron-rpc.publicnode.com/wallet"
+    val acc = JSONObject(http("$node/getaccount", JSONObject().put("address", a).put("visible", true).toString()))
+    if (!acc.has("address")) {
+        return build("Tron", "TRX", "tron", BigDecimal.ZERO, p, explorer, listOf("USDT (TRC20)" to BigDecimal.ZERO),
+            extra = listOf("Status" to "Not activated (no on-chain activity yet)"))
+    }
+    // USDT: ask the token contract for balanceOf(address); the address goes in as 32 bytes of hex.
+    val param = tronHex(a).padStart(64, '0')
+    val r = JSONObject(http("$node/triggerconstantcontract", JSONObject().put("owner_address", a).put("contract_address", USDT_TRC20)
+        .put("function_selector", "balanceOf(address)").put("parameter", param).put("visible", true).toString()))
+    val usdt = r.optJSONArray("constant_result")?.optString(0)?.ifEmpty { "0" }?.let { amount(BigInteger(it, 16), 6) } ?: BigDecimal.ZERO
+    val extra = mutableListOf<Pair<String, String>>()
+    if (acc.has("create_time")) extra += "Created" to date(acc.getLong("create_time") / 1000)
+    return build("Tron", "TRX", "tron", amount(BigInteger.valueOf(acc.optLong("balance")), 6), p, explorer,
+        listOf("USDT (TRC20)" to usdt), extra, activity = true)
+}
+
+/** A T… address as the 20-byte hex the Tron node's contract calls want (Base58 decoded, version byte and checksum dropped). */
+private fun tronHex(a: String): String {
+    val alphabet = "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz"
+    var n = BigInteger.ZERO
+    for (c in a) n = n.multiply(BigInteger.valueOf(58)).add(BigInteger.valueOf(alphabet.indexOf(c).toLong()))
+    val bytes = n.toByteArray().let { if (it.size > 25) it.copyOfRange(it.size - 25, it.size) else ByteArray(25 - it.size) + it }
+    return bytes.copyOfRange(1, 21).joinToString("") { "%02x".format(it) }
+}
+
 // ---------- Solana (public RPC) ----------
 
 /**
@@ -487,14 +519,14 @@ private fun tron(a: String, p: Map<String, Double>): ChainResult {
 internal fun solanaCall(method: String, params: JSONArray): JSONObject {
     val body = JSONObject().put("jsonrpc", "2.0").put("id", 1).put("method", method).put("params", params).toString()
     var last: Exception? = null
-    repeat(2) { attempt ->
+    // publicnode answers in well under a second; Solana's own public node is slow and often refuses, so it's the backup.
+    for (url in listOf("https://solana-rpc.publicnode.com", "https://api.mainnet-beta.solana.com")) {
         try {
-            val r = JSONObject(http("https://api.mainnet-beta.solana.com", body))
+            val r = JSONObject(http(url, body))
             r.optJSONObject("error")?.let { throw IOException(it.optString("message")) }
             return r
         } catch (e: Exception) {
             last = e
-            if (attempt == 0) Thread.sleep(700)
         }
     }
     throw last ?: IOException("Solana RPC error")
@@ -797,6 +829,13 @@ private fun knownPrices(): Map<String, Double> = priceCache?.second ?: runCatchi
     val j = JSONObject(historyPrefs?.getString("last_prices", null) ?: return emptyMap())
     j.keys().asSequence().associateWith { j.getDouble(it) }
 }.getOrDefault(emptyMap())
+
+/**
+ * How long a payment without details may still be matched: coins (BNB, ETH, SOL…) only in the first minutes, so an
+ * hour; stablecoins and TRX (searchable later) a day.
+ */
+fun detailsWindowMs(symbol: String): Long =
+    if (symbol.uppercase().startsWith("USD") || symbol.equals("TRX", true)) 86_400_000L else 3_600_000L
 
 /** A transfer's value in USD: stablecoins at face value, coins at the latest known price; null without a price. */
 fun transferUsd(amount: BigDecimal, symbol: String): BigDecimal? {

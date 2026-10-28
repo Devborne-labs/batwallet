@@ -161,7 +161,10 @@ fun RecentTxSection(
                                     Spacer(Modifier.width(6.dp))
                                 }
                                 // No other address (a fee or a contract call): just say which way it went.
-                                Text(if (other != null) fromTo(t.incoming, other) else tr(if (t.incoming) "Received" else "Sent"), maxLines = 1,
+                                // No details yet (still being matched): say so instead of a bare "Received".
+                                Text(if (other != null) fromTo(t.incoming, other)
+                                    else tr(if (t.incoming) "Received" else "Sent") + (if (t.hash == null && System.currentTimeMillis() - t.time < detailsWindowMs(t.symbol)) " · " + tr("finding details…") else ""),
+                                    maxLines = 1,
                                     overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis, fontWeight = FontWeight.Medium)
                             }
                             // Which of your wallets it was, then when.
