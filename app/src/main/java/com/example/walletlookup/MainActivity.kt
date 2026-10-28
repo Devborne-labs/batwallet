@@ -975,6 +975,11 @@ private fun App(
                 1, 2 -> WalletsTab(
                     subPage = page - 1,
                     onSubPage = { walletsPage = it },
+                    // Between Wallets and Contacts only the list slides; the header stays put (see WalletsTab).
+                    headerShift = {
+                        val o = (pager.currentPage - page) + pager.currentPageOffsetFraction
+                        if (page == 1) o.coerceIn(0f, 1f) else o.coerceIn(-1f, 0f)
+                    },
                     saved = saved,
                     cache = cache,
                     syncing = syncing,
@@ -1298,7 +1303,8 @@ private fun HomeTab(
             if (!tokens.isNullOrEmpty()) item { OtherTokensCard(tokens) }
             // Not activated: every network answered and none shows a balance or any activity.
             val unused = results.isNotEmpty() && results.all { it.error == null && !it.active }
-            if (type != null) item { SafetyCard(safety, safetyLoading, twin, savedWallet, platform, unused) }
+            val incomplete = results.any { it.error != null }
+            if (type != null) item { SafetyCard(safety, safetyLoading, twin, savedWallet, platform, unused, incomplete) }
         }
     }
 
@@ -1469,6 +1475,11 @@ private fun WalletsTab(
     /** 0 = Wallets, 1 = Contacts (each is its own page of the main swipe row). */
     subPage: Int,
     onSubPage: (Int) -> Unit,
+    /**
+     * How far this page is part-way towards the other of Wallets / Contacts (0 = settled, ±1 = fully the other).
+     * The header is held in place by that much and cross-fades, so swiping between the two looks like switching tabs.
+     */
+    headerShift: () -> Float = { 0f },
     saved: List<SavedAddress>,
     cache: Map<String, Cached>,
     syncing: Set<String>,
@@ -1565,7 +1576,13 @@ private fun WalletsTab(
 
     Column(Modifier.fillMaxSize()) {
         // Header: balance (tap to hide / show), + and ⋯, then the Wallets / Contacts tabs. Refresh is pull-down.
-        Column(Modifier.fillMaxWidth().padding(start = 16.dp, end = 12.dp, top = 12.dp)) {
+        Column(
+            Modifier.graphicsLayer {
+                val o = headerShift()
+                translationX = o * size.width
+                alpha = (1f - 2f * kotlin.math.abs(o)).coerceAtLeast(0f) // one fades out before the other fades in
+            }.fillMaxWidth().padding(start = 16.dp, end = 12.dp, top = 12.dp)
+        ) {
             if (selecting) {
                 val picked = saved.filter { it.address in selected }
                 val allArchived = picked.isNotEmpty() && picked.all { it.archived }

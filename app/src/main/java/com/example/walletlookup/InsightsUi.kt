@@ -71,6 +71,8 @@ fun SafetyCard(
     platform: Platform?,
     /** Every network answered and the address has no balance and no activity anywhere: not activated yet. */
     unused: Boolean = false,
+    /** Some network didn't answer: a clean result would only be partial. */
+    incomplete: Boolean = false,
 ) {
     var open by remember { mutableStateOf(false) }
     val badCheck = safety?.checks?.firstOrNull { it.level == Level.BAD }
@@ -91,10 +93,13 @@ fun SafetyCard(
     val amber = Color(0xFFE0A100)
     // One colour and symbol per state: red = don't send, amber = never used, green = clean, grey = yours / checking.
     val notActivated = !danger && savedWallet == null && unused
+    val partial = !danger && savedWallet == null && !notActivated && incomplete
     val (tint, symbol, title) = when {
         danger -> Triple(red, "!", verdict)
         notActivated -> Triple(amber, "!", tr("Not activated yet"))
         savedWallet != null -> Triple(MaterialTheme.colorScheme.onSurfaceVariant, "✓", verdict)
+        // Grey, not green: a network didn't answer, so the all-clear would only cover part of the address.
+        partial -> Triple(MaterialTheme.colorScheme.onSurfaceVariant, "?", tr("Couldn't fully check"))
         safety == null -> Triple(MaterialTheme.colorScheme.onSurfaceVariant, "…", verdict)
         safety.level == Level.WARN -> Triple(amber, "!", verdict)
         else -> Triple(InGreen, "✓", verdict)
@@ -103,6 +108,7 @@ fun SafetyCard(
         twin != null -> "Different address made to look like yours. Don't send money to it."
         danger -> "Reported as a scam or compromised. Don't send money to this address."
         notActivated -> "This address has never received or sent anything. Double-check it before sending money."
+        partial -> "A network didn't answer. Try again in a moment."
         else -> platform?.let { tr("Platform:") + " " + it.how }
     }
     Card(
@@ -113,7 +119,8 @@ fun SafetyCard(
         Column(Modifier.padding(16.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Box(Modifier.size(36.dp).background(tint.copy(alpha = 0.22f), CircleShape), contentAlignment = Alignment.Center) {
-                    if (loading && safety == null) CircularProgressIndicator(Modifier.size(16.dp), strokeWidth = 2.dp, color = tint)
+                    // The not-activated "!" shows straight away; it doesn't wait for the safety check.
+                    if (loading && safety == null && !notActivated && !partial) CircularProgressIndicator(Modifier.size(16.dp), strokeWidth = 2.dp, color = tint)
                     else Text(symbol, color = tint, fontWeight = FontWeight.Bold, style = MaterialTheme.typography.titleMedium)
                 }
                 Spacer(Modifier.width(12.dp))

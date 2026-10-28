@@ -407,3 +407,5 @@ Hide the "running" notification	Скрыть уведомление «работ
 Not activated yet	Ещё не активирован	अभी सक्रिय नहीं है
 This address has never received or sent anything. Double-check it before sending money.	Этот адрес ещё ничего не получал и не отправлял. Проверьте его перед отправкой денег.	इस पते पर कभी कुछ आया या गया नहीं है। पैसे भेजने से पहले इसे दोबारा जाँचें।
 Platform:	Платформа:	प्लेटफ़ॉर्म:
+Couldn't fully check	Не удалось проверить полностью	पूरी जाँच नहीं हो सकी
+A network didn't answer. Try again in a moment.	Одна из сетей не ответила. Попробуйте чуть позже.	एक नेटवर्क ने जवाब नहीं दिया। थोड़ी देर में फिर कोशिश करें।
