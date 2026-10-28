@@ -213,7 +213,7 @@ class Store(context: Context) {
         list.forEach { (w, net, t) ->
             arr.put(JSONObject().put("w", w).put("net", net).put("in", t.incoming).put("amt", t.amount.toPlainString())
                 .put("sym", t.symbol).put("t", t.time).put("hash", t.hash ?: "").put("from", t.from ?: "")
-                .put("to", t.to ?: "").put("cp", t.counterparty ?: ""))
+                .put("to", t.to ?: "").put("cp", t.counterparty ?: "").put("url", t.txUrl ?: ""))
         }
         prefs.edit().putString("recent_tx", arr.toString()).apply()
     }
@@ -223,7 +223,7 @@ class Store(context: Context) {
         (0 until arr.length()).map { i ->
             val o = arr.getJSONObject(i)
             Triple(o.getString("w"), o.getString("net"), Transfer(
-                o.getBoolean("in"), BigDecimal(o.getString("amt")), o.optString("cp").ifEmpty { null }, o.getLong("t"), null,
+                o.getBoolean("in"), BigDecimal(o.getString("amt")), o.optString("cp").ifEmpty { null }, o.getLong("t"), o.optString("url").ifEmpty { null },
                 o.optString("hash").ifEmpty { null }, o.optString("from").ifEmpty { null }, o.optString("to").ifEmpty { null },
                 o.getString("sym"),
             ))

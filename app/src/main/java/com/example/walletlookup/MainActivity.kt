@@ -404,6 +404,24 @@ private fun LockScreen(onUnlock: () -> Unit) {
 }
 
 /** Networks where the wallet has funds or activity (null = unknown, check all). */
+/**
+ * Recent payments, newest first, at most 30. The same payment from history and from an alert is kept once: by
+ * transaction ID when both have one, else same wallet, direction, coin and amount within an hour (the history one wins).
+ */
+private fun mergeRecent(all: List<Triple<String, String, Transfer>>): List<Triple<String, String, Transfer>> {
+    val unique = mutableListOf<Triple<String, String, Transfer>>()
+    for (x in all.sortedByDescending { it.third.txUrl != null }) {
+        val t = x.third
+        val dup = unique.any { (w, _, u) ->
+            w == x.first && u.incoming == t.incoming && u.symbol == t.symbol &&
+                (if (t.hash != null && u.hash != null) u.hash.equals(t.hash, true)
+                else u.amount.compareTo(t.amount) == 0 && kotlin.math.abs(u.time - t.time) < 3_600_000)
+        }
+        if (!dup) unique += x
+    }
+    return unique.sortedByDescending { it.third.time }.take(30)
+}
+
 private fun activeNetworks(results: List<ChainResult>): Set<String>? =
     results.filter { it.active && it.error == null }.map { it.network }.toSet().ifEmpty { null }
 
@@ -490,7 +508,8 @@ private fun App(
     var pendingEvm by remember { mutableStateOf<String?>(null) }
     var groupOrder by remember { mutableStateOf(store.groupOrder) }
     // Latest transfers across your wallets (shown on Home), and the one opened from there.
-    var recentTx by remember { mutableStateOf(store.loadRecentTx().take(5)) }
+    // Up to 30 latest payments across your wallets (Home shows 5; "See all" the rest).
+    var recentTx by remember { mutableStateOf(store.loadRecentTx()) }
     // Goes up after every full refresh, so Home's recent transactions are collected again.
     var syncRound by remember { mutableIntStateOf(0) }
     // Pull-to-refresh on Home bumps this to reload recent transactions even if they are fresh.
@@ -632,60 +651,65 @@ private fun App(
     // Runs every time the app opens or is unlocked (App only exists while unlocked).
     LaunchedEffect(Unit) { syncAll() }
 
-    // After balances refresh, collect the latest transfers of your wallets for Home (one wallet at a time).
-    // After each refresh, collect the latest transfers of all your wallets for Home, plus payments the alerts saw
-    // (those catch networks whose free history is short, like BSC). Duplicates are merged; only the newest 5 are kept.
-    // Collected at most every 5 minutes (it's the heaviest network use in the app), or when you pull down.
-    LaunchedEffect(saved.count { !it.contact && !it.archived }, syncRound, recentForce) {
-        val count = saved.count { !it.contact && !it.archived }
-        val forced = recentForce != recentHandled || (recentCount >= 0 && count != recentCount)
-        recentHandled = recentForce
-        recentCount = count
-        if (!forced && recentTx.isNotEmpty() && System.currentTimeMillis() - store.recentTxAt < 5 * 60_000L) return@LaunchedEffect
-        delay(800)
-        snapshotFlow { syncing.isEmpty() }.first { it }
-        // An exchange's own wallet (a known public one) moves other people's money all day: keep it off Home.
-        // Your deposit addresses in an exchange folder still show.
-        val mine = saved.filter { !it.contact && !it.archived && knownPlatform(it.address) == null }
-        if (mine.isEmpty()) {
-            if (recentTx.isNotEmpty()) { recentTx = emptyList(); store.saveRecentTx(recentTx) }
-            return@LaunchedEffect
-        }
-        val all = mutableListOf<Triple<String, String, Transfer>>()
-        for (w in mine) {
-            try {
-                history(w.address, activeNetworks(cache[w.address]?.results.orEmpty()), limit = 10)
-                    // Exchange wallets (Bybit, Binance…): only money coming in; going out is the exchange sweeping it.
-                    .forEach { h -> h.items.filter { it.incoming || !w.onExchange }.forEach { all += Triple(w.address, h.network, it) } }
-            } catch (e: CancellationException) {
-                throw e
-            } catch (_: Exception) {
+    // Recent transactions for Home: every wallet asked at the same time (4 at once, 20 s each at most), and each
+    // wallet's newest payments slot in as soon as they arrive. It runs on its own schedule (app opened, pull down,
+    // a payment, every 3 minutes while open, wallets added or removed), and a new request never cancels one that's
+    // running: it just runs once more afterwards. (Before, every balance refresh restarted it, so with frequent
+    // alerts it rarely finished and Home kept showing old payments.)
+    val recentRequests = remember { kotlinx.coroutines.channels.Channel<Unit>(kotlinx.coroutines.channels.Channel.CONFLATED) }
+    LaunchedEffect(Unit) {
+        while (true) { recentRequests.trySend(Unit); delay(3 * 60_000L) }
+    }
+    LaunchedEffect(saved.count { !it.contact && !it.archived }, recentForce) { recentRequests.trySend(Unit) }
+    LaunchedEffect(Unit) {
+        for (request in recentRequests) {
+            // An exchange's own wallet (a known public one) moves other people's money all day: keep it off Home.
+            // Your deposit addresses in an exchange folder still show.
+            val mine = store.loadAddresses().filter { !it.contact && !it.archived && knownPlatform(it.address) == null }
+            val keep = mine.map { it.address }.toSet()
+            recentTx = recentTx.filter { it.first in keep }
+            if (mine.isEmpty()) { store.saveRecentTx(recentTx); continue }
+            /** This wallet's payments for Home: its history plus what the alerts saw (exchange sends and dust left out). */
+            fun entries(w: SavedAddress, hist: List<History>): List<Triple<String, String, Transfer>> {
+                val out = mutableListOf<Triple<String, String, Transfer>>()
+                hist.forEach { h -> h.items.filter { it.incoming || !w.onExchange }.forEach { out += Triple(w.address, h.network, it) } }
+                store.loadActivity(w.address).filter { (it.amount.signum() > 0 || !w.onExchange) && !isCoinDust(it.amount, it.symbol) }
+                    .forEach { s ->
+                        val incoming = s.amount.signum() > 0
+                        out += Triple(w.address, s.network, Transfer(
+                            incoming, s.amount.abs(), if (incoming) s.from else s.to, s.time, null, s.hash, s.from, s.to, s.symbol,
+                        ))
+                    }
+                return out
             }
-            // Payments the alerts saw without details: look for them now (blocks around that time, backup nodes).
-            runCatching { Alerts.resolveMissing(context, w) }
-            store.loadActivity(w.address).filter { (it.amount.signum() > 0 || !w.onExchange) && !isCoinDust(it.amount, it.symbol) }.forEach { s ->
-                val incoming = s.amount.signum() > 0
-                all += Triple(w.address, s.network, Transfer(
-                    incoming, s.amount.abs(), if (incoming) s.from else s.to, s.time, null, s.hash, s.from, s.to, s.symbol,
-                ))
+            /**
+             * This wallet's fresh rows, merged with the rest (duplicates once, newest first, 30 kept for "See all").
+             * [replace]: its history answered, so its old rows go even if nothing is left to show; when it didn't
+             * answer, the old rows stay and only what the alerts saw is added.
+             */
+            fun merge(address: String, fresh: List<Triple<String, String, Transfer>>, replace: Boolean) {
+                recentTx = mergeRecent((if (replace) recentTx.filter { it.first != address } else recentTx) + fresh)
+                store.saveRecentTx(recentTx)
             }
-        }
-        // Same transfer from history and from an alert: keep one (by hash, or same amount within 10 minutes).
-        val unique = mutableListOf<Triple<String, String, Transfer>>()
-        for (x in all.sortedByDescending { it.third.txUrl != null }) {
-            val t = x.third
-            val dup = unique.any { (w, _, u) ->
-                w == x.first && u.incoming == t.incoming && u.symbol == t.symbol &&
-                    // Both have a transaction ID: compare those. Otherwise same amount within an hour (an alert can
-                    // notice a payment well after it happened).
-                    (if (t.hash != null && u.hash != null) u.hash.equals(t.hash, true)
-                    else u.amount.compareTo(t.amount) == 0 && kotlin.math.abs(u.time - t.time) < 3_600_000)
+            val gate = kotlinx.coroutines.sync.Semaphore(4)
+            kotlinx.coroutines.coroutineScope {
+                mine.forEach { w ->
+                    launch {
+                        gate.acquire()
+                        try {
+                            val hist = withTimeoutOrNull(20_000) {
+                                runCatching { history(w.address, activeNetworks(cache[w.address]?.results.orEmpty()), limit = 10) }.getOrNull()
+                            }
+                            merge(w.address, entries(w, hist.orEmpty()), replace = hist != null)
+                            // Payments the alerts saw without details: look for them now, then show what was found.
+                            runCatching { Alerts.resolveMissing(context, w) }
+                            merge(w.address, entries(w, hist.orEmpty()), replace = hist != null)
+                        } finally {
+                            gate.release()
+                        }
+                    }
+                }
             }
-            if (!dup) unique += x
-        }
-        if (unique.isNotEmpty()) {
-            recentTx = unique.sortedByDescending { it.third.time }.take(5)
-            store.saveRecentTx(recentTx)
             store.recentTxAt = System.currentTimeMillis()
         }
     }
@@ -726,9 +750,7 @@ private fun App(
                     Triple(addr, s.network, Transfer(incoming, s.amount.abs(), if (incoming) s.from else s.to, s.time, null,
                         s.hash, s.from, s.to, s.symbol))
                 }
-                recentTx = (fresh + recentTx)
-                    .distinctBy { (a, _, t) -> t.hash?.lowercase() ?: "$a|${t.time}|${t.amount.toPlainString()}" }
-                    .sortedByDescending { it.third.time }.take(5)
+                recentTx = mergeRecent(fresh + recentTx)
                 store.saveRecentTx(recentTx)
             }
             val now = System.currentTimeMillis()
@@ -1256,20 +1278,30 @@ private fun HomeTab(
             val mine = saved.filter { !it.contact && !it.archived }
             if (recentTx.isNotEmpty()) {
                 item {
+                    // Folder · name; the short address only when two of your wallets share that name.
+                    val walletName: (String) -> String? = { w ->
+                        saved.firstOrNull { it.address == w }?.let { s ->
+                            val twins = saved.count { !it.contact && it.name.equals(s.name, true) } > 1
+                            val raw = rawAddress(s.address)
+                            (if (s.group.isNotBlank()) s.group + " · " else "") + s.name +
+                                (if (twins) " · " + raw.take(if (raw.startsWith("0x")) 6 else 4) + "…" + raw.takeLast(4) else "")
+                        }
+                    }
+                    var all by remember { mutableStateOf(false) }
                     RecentTxSection(
-                        recentTx,
+                        recentTx.take(5),
                         names = addressNames,
-                        walletName = { w ->
-                            // Folder · name; the short address only when two of your wallets share that name.
-                            saved.firstOrNull { it.address == w }?.let { s ->
-                                val twins = saved.count { !it.contact && it.name.equals(s.name, true) } > 1
-                                val raw = rawAddress(s.address)
-                                (if (s.group.isNotBlank()) s.group + " · " else "") + s.name +
-                                    (if (twins) " · " + raw.take(if (raw.startsWith("0x")) 6 else 4) + "…" + raw.takeLast(4) else "")
-                            }
-                        },
+                        walletName = walletName,
                         onOpen = onOpenTx,
+                        onSeeAll = if (recentTx.size > 5) ({ all = true }) else null,
                     )
+                    // "See all": the latest 30 across your wallets.
+                    if (all) ModalBottomSheet(onDismissRequest = { all = false }) {
+                        Column(Modifier.verticalScroll(rememberScrollState()).padding(start = 16.dp, end = 16.dp, bottom = 32.dp)) {
+                            RecentTxSection(recentTx, names = addressNames, walletName = walletName,
+                                onOpen = { n, t -> all = false; onOpenTx(n, t) }, title = "All recent transactions")
+                        }
+                    }
                 }
             } else if (activity.isNotEmpty()) item { ActivitySection(activity) }
             if (mine.isEmpty()) item { EmptyHint() }

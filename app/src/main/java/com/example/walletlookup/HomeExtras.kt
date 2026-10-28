@@ -172,9 +172,12 @@ fun RecentTxSection(
     names: Map<String, String>,
     walletName: (String) -> String?,
     onOpen: (String, Transfer) -> Unit,
+    /** Shown as "See all" in the header when there are more than these rows. */
+    onSeeAll: (() -> Unit)? = null,
+    title: String = "Recent transactions",
 ) {
     Column {
-        SectionHeader("Recent transactions")
+        SectionHeader(title, if (onSeeAll != null) "See all" else null, onSeeAll ?: {})
         Card(Modifier.fillMaxWidth().animateContentSize()) {
             Column(Modifier.padding(vertical = 4.dp)) {
                 items.forEach { (w, net, t) ->
