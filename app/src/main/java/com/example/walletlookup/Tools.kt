@@ -126,6 +126,91 @@ fun TxCheckDialog(initial: String = "", onFound: (TxInfo) -> Unit, onDismiss: ()
     )
 }
 
+/**
+ * Before sending: paste the address you're about to pay and get a quick verdict — who it is (your wallet or contact,
+ * an exchange), whether it imitates one of yours, whether it was ever used, and the scam checks.
+ */
+@Composable
+fun SendCheckDialog(onOpen: (String) -> Unit, onDismiss: () -> Unit) {
+    val clipboard = LocalClipboardManager.current
+    val scope = rememberCoroutineScope()
+    var input by remember { mutableStateOf(clipboard.getText()?.text?.trim().orEmpty()) }
+    var busy by remember { mutableStateOf(false) }
+    var lines by remember { mutableStateOf<List<Pair<Level, String>>?>(null) }
+    fun check() {
+        val a = cleanAddress(input)
+        val type = detect(a)
+        if (type == null) { lines = listOf(Level.BAD to tr("Not a supported address")); return }
+        busy = true
+        lines = null
+        scope.launch {
+            val out = mutableListOf<Pair<Level, String>>()
+            val raw = rawAddress(a)
+            lookalikeSource.firstOrNull { rawAddress(it.address).equals(raw, true) }?.let { w ->
+                out += Level.GOOD to (tr(if (w.contact) "Your contact" else "Your wallet") + ": " + walletLabel(w))
+            }
+            lookalikeOf(a)?.let { twin ->
+                out += Level.BAD to (tr("Lookalike of") + " " + walletLabel(twin) + " · " + tr("don't send"))
+            }
+            knownPlatform(a)?.let { out += Level.INFO to (tr("Exchange wallet") + ": " + it) }
+            val results = runCatching { lookup(a, type, withPrices = false) }.getOrDefault(emptyList())
+            val ok = results.filter { it.error == null }
+            when {
+                results.isEmpty() || ok.isEmpty() -> out += Level.INFO to tr("Couldn't fully check")
+                ok.none { it.active } -> out += Level.WARN to tr("Not activated yet") + " · " + tr("never received or sent anything")
+                else -> out += Level.GOOD to tr("Used on") + " " + ok.filter { it.active }.joinToString(", ") { it.network }
+            }
+            runCatching {
+                val used = ok.filter { it.active }.map { it.network }.toSet().ifEmpty { null }
+                safety(a, history(a, used, limit = 10)).checks
+            }.getOrDefault(emptyList()).forEach { c -> out += c.level to tr(c.title) }
+            lines = out.distinctBy { it.second }
+            busy = false
+        }
+    }
+    LaunchedEffect(Unit) { if (detect(cleanAddress(input)) != null) check() }
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Check before sending") },
+        text = {
+            Column(Modifier.verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                OutlinedTextField(
+                    value = input, onValueChange = { input = it.trim(); lines = null }, singleLine = true,
+                    label = { Text("Address you'll send to") },
+                    textStyle = MaterialTheme.typography.bodySmall.copy(fontFamily = FontFamily.Monospace),
+                )
+                TextButton(onClick = { clipboard.getText()?.text?.trim()?.let { input = it; lines = null; check() } },
+                    contentPadding = androidx.compose.foundation.layout.PaddingValues(0.dp)) { Text("Paste") }
+                if (busy) Row(verticalAlignment = Alignment.CenterVertically) {
+                    CircularProgressIndicator(Modifier.size(16.dp), strokeWidth = 2.dp)
+                    Spacer(Modifier.width(10.dp))
+                    Text("Checking…", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                }
+                lines?.forEach { (level, text) ->
+                    val color = when (level) {
+                        Level.BAD -> MaterialTheme.colorScheme.error
+                        Level.WARN -> androidx.compose.ui.graphics.Color(0xFFE0A100)
+                        Level.GOOD -> InGreen
+                        Level.INFO -> MaterialTheme.colorScheme.onSurfaceVariant
+                    }
+                    Row {
+                        Text(when (level) { Level.GOOD -> "✓"; Level.INFO -> "i"; Level.WARN -> "!"; Level.BAD -> "✕" },
+                            color = color, fontWeight = androidx.compose.ui.text.font.FontWeight.Bold,
+                            modifier = Modifier.width(22.dp))
+                        androidx.compose.material3.Text(text, style = MaterialTheme.typography.bodyMedium,
+                            color = if (level == Level.BAD) color else MaterialTheme.colorScheme.onSurface)
+                    }
+                }
+            }
+        },
+        confirmButton = {
+            if (lines != null && detect(cleanAddress(input)) != null) TextButton(onClick = { onOpen(cleanAddress(input)) }) { Text("Open") }
+            else TextButton(onClick = { check() }, enabled = !busy && input.isNotBlank()) { Text("Check") }
+        },
+        dismissButton = { TextButton(onClick = onDismiss) { Text("Close") } },
+    )
+}
+
 /** Two addresses side by side; every character that differs is marked, so a swapped or poisoned address stands out. */
 @Composable
 fun CompareDialog(onDismiss: () -> Unit) {

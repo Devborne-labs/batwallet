@@ -617,13 +617,17 @@ private fun tronHistory(a: String): History {
     return History("Tron", (items + coins).sortedByDescending { it.time }.take(LIMIT))
 }
 
+private const val APT_COIN = "0x1::aptos_coin::AptosCoin"
+
 private fun aptosHistory(raw: String): History {
     val a = "0x" + raw.removePrefix("0x").lowercase().padStart(64, '0')
+    // USDT plus APT itself (as the old coin type and as its newer fungible-asset form, 0xa).
+    val assets = """["$USDT_APTOS_META", "$APT_COIN", "0xa"]"""
     val query = """
         query { fungible_asset_activities(
-            where: { owner_address: { _eq: "$a" }, asset_type: { _eq: "$USDT_APTOS_META" }, is_transaction_success: { _eq: true } },
+            where: { owner_address: { _eq: "$a" }, asset_type: { _in: $assets }, is_transaction_success: { _eq: true } },
             order_by: { transaction_version: desc }, limit: $LIMIT
-        ) { amount type transaction_timestamp transaction_version } }
+        ) { amount type asset_type transaction_timestamp transaction_version } }
     """.trimIndent()
     val j = JSONObject(http("https://api.mainnet.aptoslabs.com/v1/graphql", JSONObject().put("query", query).toString()))
     val arr = j.getJSONObject("data").getJSONArray("fungible_asset_activities")
@@ -635,7 +639,7 @@ private fun aptosHistory(raw: String): History {
     for (chunk in versions.chunked(5)) runCatching {
         val q2 = """
             query { fungible_asset_activities(
-                where: { transaction_version: { _in: [${chunk.joinToString(",")}] }, asset_type: { _eq: "$USDT_APTOS_META" },
+                where: { transaction_version: { _in: [${chunk.joinToString(",")}] }, asset_type: { _in: $assets },
                          owner_address: { _neq: "$a" } },
                 limit: 100
             ) { owner_address type transaction_version } }
@@ -665,19 +669,21 @@ private fun aptosHistory(raw: String): History {
     val items = (0 until arr.length()).mapNotNull { i ->
         val o = arr.getJSONObject(i)
         val type = o.getString("type")
-        val incoming = type.endsWith("Deposit")
-        if (!incoming && !type.endsWith("Withdraw")) return@mapNotNull null
+        // "…::Deposit" for fungible assets, "…::DepositEvent" for the old coin type; gas fees are neither.
+        val incoming = type.contains("Deposit")
+        if (!incoming && !type.contains("Withdraw")) return@mapNotNull null
+        val usdt = o.optString("asset_type") == USDT_APTOS_META
         val version = o.get("transaction_version").toString()
         // Money in came from whoever withdrew in the same transaction; money out went to whoever received it.
-        val other = others[version]?.firstOrNull { (_, t) -> if (incoming) t.endsWith("Withdraw") else t.endsWith("Deposit") }?.first
+        val other = others[version]?.firstOrNull { (_, t) -> if (incoming) t.contains("Withdraw") else t.contains("Deposit") }?.first
             ?: fromTransaction(version, incoming)
         Transfer(
             incoming,
-            amount(BigInteger(o.get("amount").toString()), 6),
+            amount(BigInteger(o.get("amount").toString()), if (usdt) 6 else 8),
             other,
             Instant.parse(o.getString("transaction_timestamp") + "Z").toEpochMilli(),
             "https://explorer.aptoslabs.com/txn/$version?network=mainnet",
-            "Version $version", if (incoming) other else a, if (incoming) a else other,
+            "Version $version", if (incoming) other else a, if (incoming) a else other, if (usdt) "USDT" else "APT",
         )
     }
     return History("Aptos", items)

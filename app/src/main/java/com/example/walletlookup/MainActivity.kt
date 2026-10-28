@@ -482,6 +482,7 @@ private fun App(
     var txCheckFor by remember { mutableStateOf<String?>(null) }
     var txInfo by remember { mutableStateOf<TxInfo?>(null) }
     var comparing by remember { mutableStateOf(false) }
+    var sendChecking by remember { mutableStateOf(false) }
     var walletSort by remember { mutableStateOf(store.walletSort) }
     // Addresses you came from while following money through transactions (Back walks back along it).
     var trail by remember { mutableStateOf(listOf<String>()) }
@@ -990,6 +991,7 @@ private fun App(
                     onPaste = { handleText(it, fromPhoto = false) },
                     onCheckTx = { txCheckFor = "" },
                     onCompare = { comparing = true },
+                    onSendCheck = { sendChecking = true },
                     activity = activity,
                     onOpen = { address = it },
                     onSeeAll = { tab = TAB_WALLETS },
@@ -1121,6 +1123,7 @@ private fun App(
         TxCheckDialog(initial, onFound = { txCheckFor = null; txInfo = it }, onDismiss = { txCheckFor = null })
     }
     if (comparing) CompareDialog { comparing = false }
+    if (sendChecking) SendCheckDialog(onOpen = { sendChecking = false; tab = TAB_HOME; openAddress(it) }, onDismiss = { sendChecking = false })
     // After a crash, offer once to send the report to the developer.
     var crashAsk by remember {
         mutableStateOf(BatApp.lastCrash(context)?.takeIf { it.hashCode() != store.crashPrompted })
@@ -1187,6 +1190,7 @@ private fun HomeTab(
     onPaste: (String) -> Boolean,
     onCheckTx: () -> Unit,
     onCompare: () -> Unit,
+    onSendCheck: () -> Unit = {},
     activity: List<Pair<SavedAddress, Seen>>,
     onOpen: (String) -> Unit,
     onSeeAll: () -> Unit,
@@ -1241,6 +1245,14 @@ private fun HomeTab(
                     OutlinedButton(onClick = onScan, modifier = Modifier.height(52.dp)) { Text("Scan") }
                 }
             }
+            // Just sent to one of your exchange deposit addresses: show it until it's surely credited.
+            val deposits = recentTx.mapNotNull { (w, net, t) ->
+                saved.firstOrNull { it.address == w }?.takeIf { s ->
+                    t.incoming && t.time > 0 && System.currentTimeMillis() - t.time < 30 * 60_000L &&
+                        s.onExchange && knownPlatform(s.address) == null
+                }?.let { Triple(it, net, t) }
+            }.take(3)
+            if (deposits.isNotEmpty()) item { DepositsCard(deposits) }
             val mine = saved.filter { !it.contact && !it.archived }
             if (recentTx.isNotEmpty()) {
                 item {
@@ -1349,6 +1361,9 @@ private fun HomeTab(
                 Row(Modifier.fillMaxWidth().padding(top = 12.dp), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                     OutlinedButton(onClick = { showRecent = false; onCheckTx() }, modifier = Modifier.weight(1f)) { Text("Check transaction") }
                     OutlinedButton(onClick = { showRecent = false; onCompare() }, modifier = Modifier.weight(1f)) { Text("Compare") }
+                }
+                OutlinedButton(onClick = { showRecent = false; onSendCheck() }, modifier = Modifier.fillMaxWidth().padding(top = 8.dp)) {
+                    Text("Check before sending")
                 }
             }
         }

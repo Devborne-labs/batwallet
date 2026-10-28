@@ -1,5 +1,9 @@
 package com.example.walletlookup
 
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.foundation.layout.size
 import androidx.compose.animation.animateContentSize
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.clickable
@@ -129,6 +133,38 @@ fun EmptyHint() {
         modifier = Modifier.padding(top = 8.dp),
     )
 }
+/** About how long an exchange takes to credit a deposit on each network (its usual confirmations). */
+private val CREDIT_MINUTES = mapOf("Tron" to 1, "BSC" to 1, "Solana" to 1, "TON" to 1, "Aptos" to 1, "Ethereum" to 3, "Polygon" to 5)
+
+/**
+ * Money that just reached one of your exchange deposit addresses (last 30 minutes): "confirming" while the exchange
+ * usually waits for confirmations, then "should be in your account now".
+ */
+@Composable
+fun DepositsCard(items: List<Triple<SavedAddress, String, Transfer>>) {
+    var now by remember { mutableStateOf(System.currentTimeMillis()) }
+    LaunchedEffect(Unit) { while (true) { kotlinx.coroutines.delay(20_000); now = System.currentTimeMillis() } }
+    Card(Modifier.fillMaxWidth().padding(top = 4.dp)) {
+        Column(Modifier.padding(horizontal = 16.dp, vertical = 12.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+            items.forEach { (w, net, t) ->
+                val exchange = w.group.ifBlank { w.name }
+                val ready = now - t.time >= (CREDIT_MINUTES[net] ?: 3) * 60_000L
+                Row(verticalAlignment = androidx.compose.ui.Alignment.CenterVertically) {
+                    if (ready) Text("✓", color = InGreen, fontWeight = FontWeight.Bold, modifier = Modifier.width(24.dp))
+                    else CircularProgressIndicator(Modifier.padding(end = 8.dp).size(16.dp), strokeWidth = 2.dp)
+                    Column(Modifier.weight(1f)) {
+                        Text(tr("Deposit to") + " $exchange · $net", fontWeight = FontWeight.Medium, maxLines = 1)
+                        Text(if (ready) tr("Should be in your") + " $exchange " + tr("account now")
+                            else tr("Confirming") + " · " + tr("about") + " ${CREDIT_MINUTES[net] ?: 3} min",
+                            style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    }
+                    Text("+" + hideable(transferValue(t.amount, t.symbol)), fontWeight = FontWeight.SemiBold, color = InGreen)
+                }
+            }
+        }
+    }
+}
+
 /** Latest transfers across your wallets. Tap one for its full details. */
 @Composable
 fun RecentTxSection(

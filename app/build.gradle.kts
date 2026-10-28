@@ -11,8 +11,20 @@ android {
         applicationId = "com.malluwayne.batwallet"
         minSdk = 28
         targetSdk = 36
-        versionCode = 48
-        versionName = "18.1"
+        versionCode = 49
+        versionName = "19.0"
+    }
+
+    // Release key: kept outside the project (path and password in ~/.gradle/gradle.properties, never in git).
+    // Without it (someone building from the source) releases fall back to the debug key.
+    val releaseKey = providers.gradleProperty("BATWALLET_STORE_FILE").orNull?.let { file(it) }?.takeIf { it.exists() }
+    signingConfigs {
+        if (releaseKey != null) create("release") {
+            storeFile = releaseKey
+            storePassword = providers.gradleProperty("BATWALLET_STORE_PASSWORD").get()
+            keyAlias = providers.gradleProperty("BATWALLET_KEY_ALIAS").get()
+            keyPassword = providers.gradleProperty("BATWALLET_KEY_PASSWORD").get()
+        }
     }
 
     buildTypes {
@@ -22,7 +34,7 @@ android {
             isMinifyEnabled = true
             isShrinkResources = true
             proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
-            signingConfig = signingConfigs.getByName("debug")
+            signingConfig = signingConfigs.getByName(if (releaseKey != null) "release" else "debug")
         }
     }
 

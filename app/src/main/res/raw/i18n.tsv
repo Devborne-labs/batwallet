@@ -414,3 +414,16 @@ Payment alerts noticed this from a balance change. Batwallet is matching it to t
 finding details…	ищем детали…	विवरण खोजा जा रहा है…
 Details not available	Детали недоступны	विवरण उपलब्ध नहीं
 Payment alerts noticed this from a balance change, but the transaction couldn't be matched. Coin transfers (BNB, ETH, POL) can only be traced in the first minutes on free nodes.	Уведомления заметили это по изменению баланса, но транзакцию не удалось найти. Переводы монет (BNB, ETH, POL) на бесплатных узлах можно отследить только в первые минуты.	पेमेंट अलर्ट ने इसे बैलेंस बदलने से देखा, पर लेन-देन नहीं मिल सका। मुफ़्त नोड पर कॉइन ट्रांसफ़र (BNB, ETH, POL) केवल शुरुआती कुछ मिनटों में खोजे जा सकते हैं।
+Not set up yet (normal until it sends)	Ещё не настроен (это нормально до первой отправки)	अभी सेट नहीं (पहली बार भेजने तक सामान्य)
+Check before sending	Проверить перед отправкой	भेजने से पहले जाँचें
+Address you'll send to	Адрес, на который отправите	जिस पते पर भेजेंगे
+Your contact	Ваш контакт	आपका संपर्क
+Your wallet	Ваш кошелёк	आपका वॉलेट
+don't send	не отправляйте	न भेजें
+Used on	Используется в	इस्तेमाल हुआ:
+never received or sent anything	ничего не получал и не отправлял	कभी कुछ नहीं आया या गया
+Deposit to	Депозит в	जमा:
+Should be in your	Уже должно быть на вашем аккаунте	अब तक आपके
+account now		खाते में होना चाहिए
+Confirming	Подтверждение	पुष्टि हो रही है
+about	примерно	लगभग

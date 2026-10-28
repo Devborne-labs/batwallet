@@ -569,7 +569,13 @@ private fun ton(a: String, p: Map<String, Double>): ChainResult {
         "https://toncenter.com/api/v3/jetton/wallets?owner_address=$enc&jetton_address=$USDT_TON&limit=1"
     )).optJSONArray("jetton_wallets")
     val usdt = if (jw != null && jw.length() > 0) amount(BigInteger(jw.getJSONObject(0).getString("balance")), 6) else BigDecimal.ZERO
-    val extra = mutableListOf("Status" to status.replaceFirstChar { it.uppercase() })
+    // "uninit" just means the wallet hasn't sent anything yet (TON sets it up on the first send): say that plainly.
+    val extra = mutableListOf("Status" to when (status) {
+        "uninit" -> "Not set up yet (normal until it sends)"
+        "active" -> "Active"
+        "frozen" -> "Frozen"
+        else -> status.replaceFirstChar { it.uppercase() }
+    })
     acc.optLong("last_activity").takeIf { it > 0 }?.let { extra += "Last activity" to date(it) }
     return build("TON", "TON", "the-open-network", amount(BigInteger.valueOf(acc.optLong("balance")), 9), p,
         "https://tonviewer.com/$a", listOf("USDT (TON)" to usdt), extra, activity = status == "active")

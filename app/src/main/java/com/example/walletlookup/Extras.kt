@@ -203,45 +203,89 @@ private fun tezosHistory(a: String): History {
 }
 
 /** Solana: SOL balance change of this address in each of its latest transactions. */
+private val SOL_STABLES = mapOf(
+    "Es9vMFrzaCERmJfrF4H2FYD4KCoNkY11McCe8BenwNYB" to "USDT",
+    "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v" to "USDC",
+)
+
 private fun solanaHistory(a: String): History {
     // One request at a time: Solana's free RPC rejects batches.
-    val sigs = solanaCall("getSignaturesForAddress", JSONArray().put(a).put(JSONObject().put("limit", minOf(MAX, 20))))
-        .getJSONArray("result")
+    fun sigsOf(account: String, limit: Int): List<String> {
+        val arr = solanaCall("getSignaturesForAddress", JSONArray().put(account).put(JSONObject().put("limit", limit))).getJSONArray("result")
+        return (0 until arr.length()).map { arr.getJSONObject(it).getString("signature") }
+    }
+    // USDT / USDC arrive in separate token accounts, so their transactions are listed under those accounts.
+    val tokenAccounts = SOL_STABLES.keys.flatMap { mint ->
+        runCatching {
+            val v = solanaCall("getTokenAccountsByOwner", JSONArray().put(a).put(JSONObject().put("mint", mint))
+                .put(JSONObject().put("encoding", "jsonParsed"))).getJSONObject("result").getJSONArray("value")
+            (0 until v.length()).map { v.getJSONObject(it).getString("pubkey") }
+        }.getOrDefault(emptyList())
+    }
+    val sigs = (sigsOf(a, minOf(MAX, 20)) + tokenAccounts.flatMap { runCatching { sigsOf(it, 10) }.getOrDefault(emptyList()) }).distinct()
     // Four at a time (one by one took most of a minute).
     val pool = java.util.concurrent.Executors.newFixedThreadPool(4)
-    val items = try { (0 until sigs.length()).map { i -> pool.submit<Transfer?> { solanaTransfer(a, sigs.getJSONObject(i).getString("signature")) } }
-        .mapNotNull { runCatching { it.get(20, java.util.concurrent.TimeUnit.SECONDS) }.getOrNull() } } finally { pool.shutdown() }
-    return History("Solana", items, note = "Shows SOL balance changes; token transfers aren't listed yet.")
+    val items = try {
+        sigs.map { sig -> pool.submit<Transfer?> { solanaTransfer(a, sig) } }
+            .mapNotNull { runCatching { it.get(20, java.util.concurrent.TimeUnit.SECONDS) }.getOrNull() }
+    } finally { pool.shutdown() }
+    return History("Solana", items.sortedByDescending { it.time }.take(LIMIT_SOL))
 }
 
-/** One transaction's SOL change for [a]; the other side is whoever's SOL moved the opposite way the most. */
+private const val LIMIT_SOL = 25
+
+/**
+ * One transaction for [a]: a USDT/USDC transfer if its token balance moved (the other side is the owner whose token
+ * balance moved the opposite way), otherwise its SOL change (the other side is whoever's SOL moved the opposite way).
+ */
 private fun solanaTransfer(a: String, sig: String): Transfer? {
-    run {
-        val r = runCatching {
-            solanaCall("getTransaction", JSONArray().put(sig)
-                .put(JSONObject().put("encoding", "json").put("maxSupportedTransactionVersion", 0))).optJSONObject("result")
-        }.getOrNull() ?: return null
-        val meta = r.optJSONObject("meta") ?: return null
-        if (meta.opt("err") != null && meta.opt("err") != JSONObject.NULL) return null
-        val keys = r.getJSONObject("transaction").getJSONObject("message").getJSONArray("accountKeys")
-        val all = (0 until keys.length()).map { keys.getString(it) }.toMutableList()
-        meta.optJSONObject("loadedAddresses")?.let { la ->
-            la.optJSONArray("writable")?.let { w -> for (k in 0 until w.length()) all += w.getString(k) }
-            la.optJSONArray("readonly")?.let { ro -> for (k in 0 until ro.length()) all += ro.getString(k) }
-        }
-        val idx = all.indexOf(a).takeIf { it >= 0 } ?: return null
-        val pre = meta.getJSONArray("preBalances")
-        val post = meta.getJSONArray("postBalances")
-        val delta = post.getLong(idx) - pre.getLong(idx)
-        if (delta == 0L) return null
-        val other = (0 until minOf(all.size, pre.length(), post.length())).filter { it != idx }
-            .map { it to post.getLong(it) - pre.getLong(it) }
-            .filter { (_, d) -> if (delta > 0) d < 0 else d > 0 }
-            .maxByOrNull { (_, d) -> kotlin.math.abs(d) }?.let { all[it.first] }
-        val incoming = delta > 0
-        return Transfer(incoming, amount(BigInteger.valueOf(kotlin.math.abs(delta)), 9), other, r.optLong("blockTime") * 1000,
-            "https://solscan.io/tx/$sig", sig, if (incoming) other else a, if (incoming) a else other, "SOL")
+    val r = runCatching {
+        solanaCall("getTransaction", JSONArray().put(sig)
+            .put(JSONObject().put("encoding", "json").put("maxSupportedTransactionVersion", 0))).optJSONObject("result")
+    }.getOrNull() ?: return null
+    val meta = r.optJSONObject("meta") ?: return null
+    if (meta.opt("err") != null && meta.opt("err") != JSONObject.NULL) return null
+    val time = r.optLong("blockTime") * 1000
+    val url = "https://solscan.io/tx/$sig"
+
+    // Token balances: (owner, mint) -> amount before / after.
+    fun balances(key: String): Map<Pair<String, String>, BigDecimal> {
+        val arr = meta.optJSONArray(key) ?: return emptyMap()
+        return (0 until arr.length()).map { arr.getJSONObject(it) }.filter { it.optString("mint") in SOL_STABLES }
+            .associate { (it.optString("owner") to it.getString("mint")) to BigDecimal(it.getJSONObject("uiTokenAmount").optString("amount", "0"))
+                .movePointLeft(it.getJSONObject("uiTokenAmount").optInt("decimals", 6)) }
     }
+    val preT = balances("preTokenBalances")
+    val postT = balances("postTokenBalances")
+    for (mint in SOL_STABLES.keys) {
+        val mine = (postT[a to mint] ?: BigDecimal.ZERO) - (preT[a to mint] ?: BigDecimal.ZERO)
+        if (mine.signum() == 0) continue
+        val incoming = mine.signum() > 0
+        val other = (preT.keys + postT.keys).filter { it.second == mint && it.first != a }.map { k ->
+            k.first to (postT[k] ?: BigDecimal.ZERO) - (preT[k] ?: BigDecimal.ZERO)
+        }.filter { (_, d) -> if (incoming) d.signum() < 0 else d.signum() > 0 }.maxByOrNull { it.second.abs() }?.first
+        return Transfer(incoming, mine.abs(), other, time, url, sig, if (incoming) other else a, if (incoming) a else other,
+            SOL_STABLES.getValue(mint))
+    }
+
+    val keys = r.getJSONObject("transaction").getJSONObject("message").getJSONArray("accountKeys")
+    val all = (0 until keys.length()).map { keys.getString(it) }.toMutableList()
+    meta.optJSONObject("loadedAddresses")?.let { la ->
+        la.optJSONArray("writable")?.let { w -> for (k in 0 until w.length()) all += w.getString(k) }
+        la.optJSONArray("readonly")?.let { ro -> for (k in 0 until ro.length()) all += ro.getString(k) }
+    }
+    val idx = all.indexOf(a).takeIf { it >= 0 } ?: return null
+    val pre = meta.getJSONArray("preBalances")
+    val post = meta.getJSONArray("postBalances")
+    val delta = post.getLong(idx) - pre.getLong(idx)
+    if (delta == 0L) return null
+    val other = (0 until minOf(all.size, pre.length(), post.length())).filter { it != idx }
+        .map { it to post.getLong(it) - pre.getLong(it) }
+        .filter { (_, d) -> if (delta > 0) d < 0 else d > 0 }
+        .maxByOrNull { (_, d) -> kotlin.math.abs(d) }?.let { all[it.first] }
+    val incoming = delta > 0
+    return Transfer(incoming, amount(BigInteger.valueOf(kotlin.math.abs(delta)), 9), other, time, url, sig,
+        if (incoming) other else a, if (incoming) a else other, "SOL")
 }
 /** Native-coin transfers on an EVM network, from whichever free source covers it. */
 internal fun evmNativeTransfers(name: String, chainId: Long, blockscout: String?, routescan: Boolean, txBase: String, a: String): List<Transfer> {
