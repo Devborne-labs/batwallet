@@ -74,8 +74,12 @@ private val EXCHANGES = listOf(
 /** True for a wallet on an exchange: its folder or name mentions one, or it is a known exchange address. */
 fun isExchangeWallet(address: String, folder: String = "", name: String = ""): Boolean {
     val text = "$folder $name".lowercase()
-    return knownPlatform(address) != null || EXCHANGES.any { it in text }
+    return knownPlatform(address) != null || EXCHANGE_WORDS.any { it.containsMatchIn(text) }
 }
+
+/** Whole words only, so "Gateway" isn't Gate.io and "Bybit 2" or "gate.io" still count. */
+private val EXCHANGE_WORDS = EXCHANGES.map { Regex("(?<![a-z])" + Regex.escape(it) + "(?![a-z])") }
+private fun mentionsExchange(text: String, key: String) = EXCHANGE_WORDS[EXCHANGES.indexOf(key)].containsMatchIn(text)
 
 /** A wallet on an exchange holds the exchange's coins, not yours: it stays out of totals and its balance is hidden. */
 val SavedAddress.onExchange: Boolean get() = isExchangeWallet(address, group, name)
@@ -93,7 +97,7 @@ fun exchangeNote(address: String, platform: Platform?, folder: String = "", name
     }
     val text = "$folder $name".lowercase()
     val exchange = platform?.takeIf { it.how.startsWith("Likely") }?.name
-        ?: EXCHANGES.firstOrNull { it in text }?.let { key ->
+        ?: EXCHANGES.firstOrNull { mentionsExchange(text, it) }?.let { key ->
             folder.takeIf { it.contains(key, ignoreCase = true) } ?: key.replaceFirstChar { it.uppercase() }
         }
         ?: return null
@@ -125,7 +129,7 @@ private val EXCHANGE_NAMES = mapOf(
 fun exchangeIdentity(address: String, platform: Platform?, folder: String = "", name: String = ""): ExchangeId? {
     knownPlatform(address)?.let { return ExchangeId(it, Attribution.CONFIRMED, ownWallet = true) }
     val text = "$folder $name".lowercase()
-    EXCHANGES.firstOrNull { it in text }?.let { return ExchangeId(EXCHANGE_NAMES[it] ?: it, Attribution.YOUR_LABEL, ownWallet = false) }
+    EXCHANGES.firstOrNull { mentionsExchange(text, it) }?.let { return ExchangeId(EXCHANGE_NAMES[it] ?: it, Attribution.YOUR_LABEL, ownWallet = false) }
     platform?.takeIf { it.how.startsWith("Likely") }?.let { return ExchangeId(it.name, Attribution.POSSIBLE, ownWallet = false) }
     return null
 }

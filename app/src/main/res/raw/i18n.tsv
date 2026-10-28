@@ -383,3 +383,12 @@ Archive folder	Архивировать папку	फ़ोल्डर आर�
 Unarchive folder	Вернуть папку из архива	फ़ोल्डर आर्काइव से निकालें
 Exchange	Биржа	एक्सचेंज
 Retry	Повторить	फिर से
+Update	Обновить	अपडेट करें
+Update failed	Не удалось обновить	अपडेट नहीं हो सका
+Downloading…	Загрузка…	डाउनलोड हो रहा है…
+Allow Batwallet to install updates, then tap Update again	Разрешите Batwallet устанавливать обновления, затем снова нажмите «Обновить»	Batwallet को अपडेट इंस्टॉल करने की अनुमति दें, फिर से अपडेट करें दबाएँ
+Not a Batwallet release	Это не релиз Batwallet	यह Batwallet रिलीज़ नहीं है
+The download is damaged. Try again.	Файл повреждён. Попробуйте ещё раз.	डाउनलोड खराब है। फिर से कोशिश करें।
+Not a Batwallet APK	Это не APK Batwallet	यह Batwallet APK नहीं है
+You already have this version	У вас уже эта версия	आपके पास यह वर्शन पहले से है
+This APK isn't signed with Batwallet's key	Этот APK подписан не ключом Batwallet	यह APK Batwallet की कुंजी से साइन नहीं है

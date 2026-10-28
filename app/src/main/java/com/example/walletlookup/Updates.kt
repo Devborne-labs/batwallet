@@ -25,6 +25,27 @@ suspend fun latestRelease(): Release? = withContext(Dispatchers.IO) {
     }.getOrNull()
 }
 
+/**
+ * The quiet weekly check: asks GitHub at most once every 7 days (a single small request) and remembers the newest
+ * version, so Settings can say "16.x available" without you checking by hand.
+ */
+suspend fun weeklyUpdateCheck(context: Context) {
+    val prefs = context.getSharedPreferences("updates", Context.MODE_PRIVATE)
+    if (System.currentTimeMillis() - prefs.getLong("checked", 0) < 7 * 24 * 3600_000L) return
+    val latest = latestRelease() ?: return
+    rememberRelease(context, latest)
+}
+
+fun rememberRelease(context: Context, release: Release) {
+    context.getSharedPreferences("updates", Context.MODE_PRIVATE).edit()
+        .putLong("checked", System.currentTimeMillis()).putString("latest", release.version).apply()
+}
+
+/** The newer version found by the last check, or null when you're up to date. */
+fun knownUpdate(context: Context): String? =
+    context.getSharedPreferences("updates", Context.MODE_PRIVATE).getString("latest", null)
+        ?.takeIf { isNewerVersion(it, BatApp.appVersion(context)) }
+
 /** True when version [a] (e.g. "16.10") is newer than [b] ("16.9"). */
 fun isNewerVersion(a: String, b: String): Boolean {
     val x = a.split('.').map { it.toIntOrNull() ?: 0 }

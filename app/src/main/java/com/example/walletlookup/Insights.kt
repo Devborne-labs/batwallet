@@ -396,11 +396,14 @@ private fun aptosHistory(raw: String): History {
     // Aptos records each side of a transfer separately, so look up the other side (same transaction, other owner).
     val versions = (0 until arr.length()).map { arr.getJSONObject(it).get("transaction_version").toString() }.distinct()
     val others = HashMap<String, MutableList<Pair<String, String>>>() // version -> (owner, type)
-    if (versions.isNotEmpty()) runCatching {
+    // A few transactions at a time: the indexer returns at most 100 rows, and an exchange's batch payouts fill that
+    // with other people's transfers, which left the newest rows without a counterparty.
+    for (chunk in versions.chunked(5)) runCatching {
         val q2 = """
             query { fungible_asset_activities(
-                where: { transaction_version: { _in: [${versions.joinToString(",")}] }, asset_type: { _eq: "$USDT_APTOS_META" },
-                         owner_address: { _neq: "$a" } }
+                where: { transaction_version: { _in: [${chunk.joinToString(",")}] }, asset_type: { _eq: "$USDT_APTOS_META" },
+                         owner_address: { _neq: "$a" } },
+                limit: 100
             ) { owner_address type transaction_version } }
         """.trimIndent()
         val r = JSONObject(http("https://api.mainnet.aptoslabs.com/v1/graphql", JSONObject().put("query", q2).toString()))
@@ -411,6 +414,20 @@ private fun aptosHistory(raw: String): History {
             others.getOrPut(o.get("transaction_version").toString()) { mutableListOf() } += owner to o.getString("type")
         }
     }
+    /** Still unknown: read the transaction itself (the sender paid us; the recipient is in its arguments). */
+    var lookups = 0
+    fun fromTransaction(version: String, incoming: Boolean): String? {
+        if (lookups++ >= 20) return null
+        return runCatching {
+            val t = JSONObject(http("https://fullnode.mainnet.aptoslabs.com/v1/transactions/by_version/$version"))
+            if (incoming) t.optString("sender").takeIf { it.startsWith("0x") && it != a }
+            else {
+                val args = t.optJSONObject("payload")?.optJSONArray("arguments") ?: return@runCatching null
+                (0 until args.length()).map { args.opt(it) }.filterIsInstance<String>()
+                    .firstOrNull { it.matches(Regex("0x[0-9a-fA-F]{1,64}")) && it != a && it != USDT_APTOS_META }
+            }
+        }.getOrNull()
+    }
     val items = (0 until arr.length()).mapNotNull { i ->
         val o = arr.getJSONObject(i)
         val type = o.getString("type")
@@ -419,6 +436,7 @@ private fun aptosHistory(raw: String): History {
         val version = o.get("transaction_version").toString()
         // Money in came from whoever withdrew in the same transaction; money out went to whoever received it.
         val other = others[version]?.firstOrNull { (_, t) -> if (incoming) t.endsWith("Withdraw") else t.endsWith("Deposit") }?.first
+            ?: fromTransaction(version, incoming)
         Transfer(
             incoming,
             amount(BigInteger(o.get("amount").toString()), 6),

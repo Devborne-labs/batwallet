@@ -135,6 +135,7 @@ import androidx.core.content.ContextCompat
 import androidx.fragment.app.FragmentActivity
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
+import androidx.lifecycle.lifecycleScope
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Job
@@ -235,6 +236,8 @@ class MainActivity : FragmentActivity() {
         fiatRate = store.currencyRate
         // The lock always covers the whole app (locking only Wallets left the total visible on Home).
         locked = lockEnabled && canAuthenticate()
+        lifecycleScope.launch { runCatching { weeklyUpdateCheck(applicationContext) } }
+        SelfUpdate.cleanUp(this)
         priceSource = PriceSource.AUTO // always automatic: CoinMarketCap first, then the backups
         etherscanKey = store.etherscanKey
         // Background alerts and the screen-off lock are extras: if either fails, the app still opens.
@@ -2315,13 +2318,21 @@ private fun SettingsTab(
         }
         SettingsSection("Support") {
         // Updates come from the GitHub Releases page; the APK is downloaded in the browser and installed from there.
-        SettingGroup("Updates", tr("Version") + " " + BatApp.appVersion(context), open == "updates", { toggle("updates") }) {
+        var knownNewer by remember { mutableStateOf(knownUpdate(context)) }
+        SettingGroup(
+            "Updates",
+            knownNewer?.let { tr("Version") + " $it " + tr("is available") } ?: (tr("Version") + " " + BatApp.appVersion(context)),
+            open == "updates", { toggle("updates") },
+        ) {
             // Opening the row is the check: no second tap needed.
             var checking by remember { mutableStateOf(true) }
             var result by remember { mutableStateOf<Release?>(null) }
             var checked by remember { mutableStateOf(false) }
             LaunchedEffect(checking) {
-                if (checking) { result = latestRelease(); checked = true; checking = false }
+                if (checking) {
+                    result = latestRelease()?.also { rememberRelease(context, it); knownNewer = knownUpdate(context) }
+                    checked = true; checking = false
+                }
             }
             val latest = result
             when {
@@ -2339,8 +2350,39 @@ private fun SettingsTab(
                 isNewerVersion(latest.version, BatApp.appVersion(context)) -> {
                     Text(tr("Version") + " ${latest.version} " + tr("is available"), fontWeight = FontWeight.SemiBold,
                         modifier = Modifier.padding(top = 8.dp))
+                    // Downloaded and installed here; the APK is deleted as soon as Android's installer has it.
+                    var progress by remember { mutableStateOf<Float?>(null) }
+                    var error by remember { mutableStateOf<String?>(null) }
+                    val p = progress
+                    if (p != null) {
+                        LinearProgressIndicator(progress = { p }, modifier = Modifier.fillMaxWidth().padding(vertical = 8.dp))
+                        Text(tr("Downloading…") + " ${(p * 100).toInt()}%", style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    }
+                    error?.let {
+                        Text(tr(it), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error,
+                            modifier = Modifier.padding(top = 4.dp))
+                    }
                     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        TextButton(onClick = { openInBrowser(context, latest.apkUrl ?: latest.pageUrl) }) { Text("Download") }
+                        OutlinedButton(enabled = p == null, onClick = {
+                            val apk = latest.apkUrl
+                            when {
+                                !SelfUpdate.trusted(apk) -> openInBrowser(context, latest.pageUrl)
+                                !SelfUpdate.canInstall(context) -> {
+                                    android.widget.Toast.makeText(context, tr("Allow Batwallet to install updates, then tap Update again"),
+                                        android.widget.Toast.LENGTH_LONG).show()
+                                    SelfUpdate.openInstallPermission(context)
+                                }
+                                else -> {
+                                    error = null
+                                    progress = 0f
+                                    scope.launch {
+                                        error = SelfUpdate.downloadAndInstall(context, apk!!) { progress = it }
+                                        progress = null
+                                    }
+                                }
+                            }
+                        }) { Text("Update") }
                         TextButton(onClick = { openInBrowser(context, latest.pageUrl) }) { Text("What's new") }
                     }
                 }
