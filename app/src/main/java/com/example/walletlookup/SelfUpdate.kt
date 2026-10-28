@@ -9,7 +9,15 @@ import android.content.pm.PackageManager
 import android.net.Uri
 import android.os.Build
 import android.provider.Settings
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.ensureActive
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.io.File
 import java.io.IOException
@@ -23,6 +31,40 @@ import java.security.MessageDigest
  */
 object SelfUpdate {
     private const val FILE = "update.apk"
+
+    /** Where an update is; kept here (not in a screen) so closing Settings doesn't lose it. */
+    sealed interface State {
+        data object Idle : State
+        data class Downloading(val done: Long, val total: Long) : State
+        /** Handed to Android's installer, which may ask you to confirm. */
+        data object Installing : State
+        data class Failed(val message: String) : State
+    }
+
+    var state by mutableStateOf<State>(State.Idle)
+    /** The version being installed, for the progress dialog's title. */
+    var version by mutableStateOf("")
+        private set
+
+    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+    private var job: Job? = null
+
+    /** Starts downloading and installing [url]; does nothing while an update is already running. */
+    fun start(context: Context, url: String, newVersion: String) {
+        if (state is State.Downloading || state is State.Installing) return
+        version = newVersion
+        state = State.Downloading(0, 0)
+        val app = context.applicationContext
+        job = scope.launch {
+            val error = downloadAndInstall(app, url)
+            state = if (error == null) State.Installing else State.Failed(error)
+        }
+    }
+
+    fun cancel() {
+        job?.cancel()
+        state = State.Idle
+    }
 
     /** Android's one-time "install unknown apps" switch for Batwallet. */
     fun canInstall(context: Context) = context.packageManager.canRequestPackageInstalls()
@@ -43,15 +85,20 @@ object SelfUpdate {
     fun trusted(url: String?) = url != null && url.startsWith("$GITHUB_URL/releases/download/") && url.endsWith(".apk")
 
     /** Downloads and starts the install; returns an error message, or null once Android's installer has it. */
-    suspend fun downloadAndInstall(context: Context, url: String, onProgress: (Float) -> Unit): String? =
+    private suspend fun downloadAndInstall(context: Context, url: String): String? =
         withContext(Dispatchers.IO) {
             if (!trusted(url)) return@withContext "Not a Batwallet release"
             val file = File(context.cacheDir, FILE)
             try {
-                download(url, file, onProgress)
+                download(url, file)
+                ensureActive()
                 check(context, file)?.let { return@withContext it }
                 install(context, file)
                 null
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                throw e
+            } catch (e: java.net.UnknownHostException) {
+                "No internet connection"
             } catch (e: Exception) {
                 e.message ?: "Update failed"
             } finally {
@@ -60,27 +107,34 @@ object SelfUpdate {
             }
         }
 
-    private fun download(url: String, file: File, onProgress: (Float) -> Unit) {
+    private suspend fun download(url: String, file: File) {
         val c = URL(url).openConnection() as HttpURLConnection // GitHub redirects to its download host (https → https)
         c.connectTimeout = 15_000
         c.readTimeout = 30_000
         c.setRequestProperty("User-Agent", "Batwallet/1.0")
         try {
             if (c.responseCode !in 200..299) throw IOException("HTTP ${c.responseCode}")
-            val total = c.contentLengthLong
+            val total = c.contentLengthLong // -1 when the server doesn't say: the dialog then shows a moving bar
             var done = 0L
+            var shown = 0L
             c.inputStream.use { input ->
                 file.outputStream().use { out ->
                     val buf = ByteArray(64 * 1024)
                     while (true) {
+                        kotlin.coroutines.coroutineContext.ensureActive() // Cancel stops the download
                         val n = input.read(buf)
                         if (n < 0) break
                         out.write(buf, 0, n)
                         done += n
-                        if (total > 0) onProgress(done.toFloat() / total)
+                        // About every 100 KB is plenty for a smooth bar, without redrawing for every block.
+                        if (done - shown >= 100_000) {
+                            shown = done
+                            withContext(Dispatchers.Main) { state = State.Downloading(done, total) }
+                        }
                     }
                 }
             }
+            withContext(Dispatchers.Main) { state = State.Downloading(done, if (total > 0) total else done) }
         } finally {
             c.disconnect()
         }
@@ -134,13 +188,11 @@ class InstallReceiver : BroadcastReceiver() {
                 else @Suppress("DEPRECATION") intent.getParcelableExtra<Intent>(Intent.EXTRA_INTENT)
                 confirm?.let { runCatching { context.startActivity(it.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)) } }
             }
-            PackageInstaller.STATUS_SUCCESS -> {}
-            PackageInstaller.STATUS_FAILURE_ABORTED -> {} // you tapped Cancel
-            else -> android.widget.Toast.makeText(
-                context,
-                tr("Update failed") + intent.getStringExtra(PackageInstaller.EXTRA_STATUS_MESSAGE)?.let { ": $it" }.orEmpty(),
-                android.widget.Toast.LENGTH_LONG,
-            ).show()
+            PackageInstaller.STATUS_SUCCESS -> SelfUpdate.state = SelfUpdate.State.Idle
+            PackageInstaller.STATUS_FAILURE_ABORTED -> SelfUpdate.state = SelfUpdate.State.Idle // you tapped Cancel
+            else -> SelfUpdate.state = SelfUpdate.State.Failed(
+                tr("Update failed") + intent.getStringExtra(PackageInstaller.EXTRA_STATUS_MESSAGE)?.let { ": $it" }.orEmpty()
+            )
         }
     }
 }

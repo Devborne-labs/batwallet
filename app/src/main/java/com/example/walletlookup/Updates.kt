@@ -12,7 +12,7 @@ const val GITHUB_REPO = "Devborne-labs/batwallet"
 const val GITHUB_URL = "https://github.com/$GITHUB_REPO"
 
 /** The newest published version: its number, the APK to download, and the release page. */
-data class Release(val version: String, val apkUrl: String?, val pageUrl: String)
+data class Release(val version: String, val apkUrl: String?, val pageUrl: String, val notes: String = "")
 
 /** Latest release from GitHub (public API, no account needed). Null when it can't be reached. */
 suspend fun latestRelease(): Release? = withContext(Dispatchers.IO) {
@@ -21,8 +21,27 @@ suspend fun latestRelease(): Release? = withContext(Dispatchers.IO) {
         val assets = j.optJSONArray("assets")
         val apk = (0 until (assets?.length() ?: 0)).map { assets!!.getJSONObject(it) }
             .firstOrNull { it.optString("name").endsWith(".apk") }?.optString("browser_download_url")
-        Release(j.getString("tag_name").removePrefix("v"), apk, j.optString("html_url", "$GITHUB_URL/releases"))
+        Release(j.getString("tag_name").removePrefix("v"), apk, j.optString("html_url", "$GITHUB_URL/releases"), j.optString("body"))
     }.getOrNull()
+}
+
+/** The release notes of one version (e.g. the one you just updated to), or null if GitHub can't be reached. */
+suspend fun releaseNotes(version: String): String? = withContext(Dispatchers.IO) {
+    runCatching { JSONObject(http("https://api.github.com/repos/$GITHUB_REPO/releases/tags/v$version")).optString("body") }
+        .getOrNull()?.takeIf { it.isNotBlank() }
+}
+
+/**
+ * True once per new version: the first launch after updating (not after a fresh install), so the app can show
+ * what changed. [hasData]: you already had wallets saved (covers updating from a version that didn't record this).
+ */
+fun justUpdated(context: Context, hasData: Boolean): Boolean {
+    val prefs = context.getSharedPreferences("updates", Context.MODE_PRIVATE)
+    val current = BatApp.appVersion(context)
+    val last = prefs.getString("seen", null)
+    if (last == current) return false
+    prefs.edit().putString("seen", current).apply()
+    return last != null || hasData
 }
 
 /**

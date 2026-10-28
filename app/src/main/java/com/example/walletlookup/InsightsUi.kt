@@ -295,12 +295,14 @@ fun HistoryScreen(
                             }
                         }
                     }
-                    if (seen.isNotEmpty()) {
+                    // Payments the alerts caught that the blockchain list above doesn't already show (no doubles).
+                    val unmatched = seen.filter { s -> d.orEmpty().none { h -> h.network == s.network && h.items.any { sameTransfer(it, s) } } }
+                    if (unmatched.isNotEmpty()) {
                         item(key = "seen") {
                             Spacer(Modifier.height(12.dp))
                             Text("Detected by payment alerts", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
                         }
-                        itemsIndexed(seen, key = { i, _ -> "s:$i" }) { _, s ->
+                        itemsIndexed(unmatched, key = { i, _ -> "s:$i" }) { _, s ->
                             SeenRow(s, onClick = {
                                 val incoming = s.amount.signum() > 0
                                 selected = s.network to Transfer(
@@ -313,6 +315,16 @@ fun HistoryScreen(
             }
         }
     }
+}
+
+/**
+ * Whether an alert's payment is this blockchain transfer: same transaction ID, or (older alerts without one) same
+ * direction, coin and amount, noticed within an hour after it happened.
+ */
+private fun sameTransfer(t: Transfer, s: Seen): Boolean {
+    if (s.hash != null && t.hash != null) return s.hash.equals(t.hash, ignoreCase = true)
+    return t.incoming == (s.amount.signum() > 0) && t.symbol == s.symbol && t.amount.compareTo(s.amount.abs()) == 0 &&
+        s.time - t.time in -5 * 60_000L..60 * 60_000L
 }
 
 /** The address's current balance on one network: value, then its stablecoins and coin. */

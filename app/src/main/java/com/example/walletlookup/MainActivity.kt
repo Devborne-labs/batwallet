@@ -16,6 +16,9 @@ import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.material.icons.filled.Menu
 import androidx.compose.foundation.gestures.detectDragGestures
+import androidx.compose.foundation.gestures.detectDragGesturesAfterLongPress
+import androidx.compose.runtime.withFrameNanos
+import kotlinx.coroutines.flow.collectLatest
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.zIndex
@@ -54,6 +57,7 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
@@ -1058,6 +1062,13 @@ private fun App(
             txAlternative = choicesTx, onCheckTx = { choices = null; txCheckFor = it },
         )
     }
+    // An update in progress (started in Settings) and, once after updating, what changed.
+    UpdateProgressDialog()
+    var whatsNew by remember { mutableStateOf<String?>(null) }
+    LaunchedEffect(Unit) {
+        if (justUpdated(context, saved.isNotEmpty())) whatsNew = releaseNotes(BatApp.appVersion(context))
+    }
+    whatsNew?.let { WhatsNewDialog(BatApp.appVersion(context), it) { whatsNew = null } }
     txCheckFor?.let { initial ->
         TxCheckDialog(initial, onFound = { txCheckFor = null; txInfo = it }, onDismiss = { txCheckFor = null })
     }
@@ -1609,7 +1620,7 @@ private fun WalletsTab(
                 )
             }
             if (editOrder) {
-                Text("Drag ≡ to move", style = MaterialTheme.typography.bodySmall,
+                Text("Drag ≡, or hold a wallet and drag", style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(top = 10.dp))
             }
         }
@@ -1620,6 +1631,18 @@ private fun WalletsTab(
                 val pg = pages[p]
                 val listState = rememberLazyListState()
                 val drag = remember(listState) { Reorder(listState) }
+                // While a row is held at the top or bottom edge, keep scrolling so it can go anywhere in the list.
+                LaunchedEffect(drag) {
+                    snapshotFlow { drag.key != null }.collectLatest { held ->
+                        while (held) {
+                            withFrameNanos { }
+                            if (drag.edge != 0) {
+                                drag.dy += listState.dispatchRawDelta(drag.edge * 14f)
+                                drag.moved()
+                            }
+                        }
+                    }
+                }
                 LazyColumn(
                     state = listState,
                     modifier = Modifier.fillMaxSize(),
@@ -1690,8 +1713,10 @@ private fun WalletsTab(
                                 val c = cache[item.address]
                                 val peers = inOrder.filter { it.pinned == item.pinned }.map { it.address }
                                 fun toggle() { selected = if (item.address in selected) selected - item.address else selected + item.address }
+                                val swapRow: (String, String) -> Unit = { a, b -> adoptShownOrder(pg); onSwap(a, b) }
                                 WalletRow(
-                                    if (drag.key == item.address) Modifier.dragged(drag, item.address) else Modifier.animateItem(),
+                                    (if (drag.key == item.address) Modifier.dragged(drag, item.address) else Modifier.animateItem())
+                                        .then(if (editOrder && peers.size > 1) Modifier.reorderable(drag, item.address, peers, true, swapRow) else Modifier),
                                     item, c,
                                     syncing = item.address in syncing,
                                     failed = item.address in failed,
@@ -1703,7 +1728,7 @@ private fun WalletsTab(
                                     onDelete = { deleting = it },
                                     onPin = onPin,
                                     handle = if (editOrder && peers.size > 1) {
-                                        { DragHandle(drag, item.address, peers) { a, b -> adoptShownOrder(pg); onSwap(a, b) } }
+                                        { DragHandle(drag, item.address, peers, swapRow) }
                                     } else null,
                                     selectMode = selecting,
                                     isSelected = item.address in selected,
@@ -1813,10 +1838,11 @@ private fun WalletRow(
     Row(
         modifier.fillMaxWidth().clip(RoundedCornerShape(12.dp))
             .background(if (isSelected) MaterialTheme.colorScheme.surfaceVariant else ComposeColor.Transparent)
-            .combinedClickable(
+            // While ordering (handle shown) the row is for dragging only: no opening, no menu.
+            .then(if (handle != null) Modifier else Modifier.combinedClickable(
                 onClick = { if (selectMode) onToggleSelect() else onPick(item) },
                 onLongClick = { if (selectMode) onToggleSelect() else menu = true },
-            )
+            ))
             .padding(vertical = 12.dp, horizontal = 4.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
@@ -1905,38 +1931,78 @@ private fun UnderlineTab(label: String, selected: Boolean, modifier: Modifier, o
 private class Reorder(val list: LazyListState) {
     var key by mutableStateOf<String?>(null)
     var dy by mutableFloatStateOf(0f)
+    /** -1, 0 or 1: the held row is at the top edge, in the middle, or at the bottom edge (auto-scroll). */
+    var edge = 0
+    var peers: List<String> = emptyList()
+    var onSwap: (String, String) -> Unit = { _, _ -> }
+    // After a swap, wait for the list to redraw before the next one, so a quick drag can't swap straight back.
+    private var settleFrom: Int? = null
+    private var settleWait = 0
+
+    fun start(k: String) { key = k; dy = 0f; edge = 0; settleFrom = null }
+    fun stop() { key = null; dy = 0f; edge = 0; settleFrom = null }
+
+    /** The held row moved (finger or auto-scroll): note the edge, and swap with the row it now covers. */
+    fun moved() {
+        val k = key ?: return
+        val info = list.layoutInfo
+        val cur = info.visibleItemsInfo.firstOrNull { it.key == k } ?: return
+        settleFrom?.let { from ->
+            if (cur.offset == from && settleWait++ < 10) return
+            settleFrom = null
+        }
+        val top = cur.offset + dy
+        val margin = 48f
+        edge = when {
+            top < info.viewportStartOffset + margin -> -1
+            top + cur.size > info.viewportEndOffset - margin -> 1
+            else -> 0
+        }
+        val mid = top + cur.size / 2f
+        val target = info.visibleItemsInfo.firstOrNull { it.key != k && it.key in peers && mid > it.offset && mid < it.offset + it.size }
+            ?: return
+        settleFrom = cur.offset
+        settleWait = 0
+        onSwap(k, target.key as String)
+        dy += cur.offset - target.offset // the row jumps to the target's place; keep it under the finger
+    }
 }
 
 /** The held row follows your finger and floats above the others. */
 private fun Modifier.dragged(r: Reorder, key: String): Modifier =
     if (r.key == key) zIndex(1f).graphicsLayer { translationY = r.dy; shadowElevation = 12f } else this
 
+/**
+ * Drag to reorder among [peers]: straight away on the ≡ handle, or after holding the row ([afterHold]) so a plain
+ * swipe still scrolls the list.
+ */
+@Composable
+private fun Modifier.reorderable(r: Reorder, key: String, peers: List<String>, afterHold: Boolean, onSwap: (String, String) -> Unit): Modifier {
+    val peersNow by rememberUpdatedState(peers)
+    val swapNow by rememberUpdatedState(onSwap)
+    return pointerInput(key, afterHold) {
+        val onDrag: (androidx.compose.ui.input.pointer.PointerInputChange, androidx.compose.ui.geometry.Offset) -> Unit = { change, amount ->
+            change.consume()
+            r.peers = peersNow
+            r.onSwap = swapNow
+            r.dy += amount.y
+            r.moved()
+        }
+        if (afterHold) {
+            detectDragGesturesAfterLongPress(onDragStart = { r.start(key) }, onDragEnd = { r.stop() }, onDragCancel = { r.stop() }, onDrag = onDrag)
+        } else {
+            detectDragGestures(onDragStart = { r.start(key) }, onDragEnd = { r.stop() }, onDragCancel = { r.stop() }, onDrag = onDrag)
+        }
+    }
+}
+
 /** ≡ handle: drag it up or down; the row swaps places with a neighbour ([peers]) as you pass over it. */
 @Composable
 private fun DragHandle(r: Reorder, key: String, peers: List<String>, onSwap: (String, String) -> Unit) {
-    val peersNow by rememberUpdatedState(peers)
-    val swapNow by rememberUpdatedState(onSwap)
     Icon(
         Icons.Filled.Menu, contentDescription = "Drag to reorder",
         tint = MaterialTheme.colorScheme.onSurfaceVariant,
-        modifier = Modifier.size(40.dp).pointerInput(key) {
-            detectDragGestures(
-                onDragStart = { r.key = key; r.dy = 0f },
-                onDragEnd = { r.key = null; r.dy = 0f },
-                onDragCancel = { r.key = null; r.dy = 0f },
-            ) { change, amount ->
-                change.consume()
-                r.dy += amount.y
-                val items = r.list.layoutInfo.visibleItemsInfo
-                val cur = items.firstOrNull { it.key == key } ?: return@detectDragGestures
-                val mid = cur.offset + cur.size / 2f + r.dy
-                val target = items.firstOrNull { it.key != key && it.key in peersNow && mid > it.offset && mid < it.offset + it.size }
-                if (target != null) {
-                    swapNow(key, target.key as String)
-                    r.dy += cur.offset - target.offset // the row jumps to the target's place; keep it under the finger
-                }
-            }
-        }.padding(8.dp),
+        modifier = Modifier.size(40.dp).reorderable(r, key, peers, false, onSwap).padding(8.dp),
     )
 }
 
@@ -2354,44 +2420,51 @@ private fun SettingsTab(
                 isNewerVersion(latest.version, BatApp.appVersion(context)) -> {
                     Text(tr("Version") + " ${latest.version} " + tr("is available"), fontWeight = FontWeight.SemiBold,
                         modifier = Modifier.padding(top = 8.dp))
-                    // Downloaded and installed here; the APK is deleted as soon as Android's installer has it.
-                    var progress by remember { mutableStateOf<Float?>(null) }
-                    var error by remember { mutableStateOf<String?>(null) }
-                    val p = progress
-                    if (p != null) {
-                        LinearProgressIndicator(progress = { p }, modifier = Modifier.fillMaxWidth().padding(vertical = 8.dp))
-                        Text(tr("Downloading…") + " ${(p * 100).toInt()}%", style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    // What changed, right here instead of on GitHub.
+                    if (latest.notes.isNotBlank()) {
+                        ReleaseNotes(latest.notes, Modifier.padding(vertical = 8.dp).heightIn(max = 320.dp)
+                            .verticalScroll(rememberScrollState()))
                     }
-                    error?.let {
-                        Text(tr(it), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error,
-                            modifier = Modifier.padding(top = 4.dp))
-                    }
-                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        OutlinedButton(enabled = p == null, onClick = {
-                            val apk = latest.apkUrl
-                            when {
-                                !SelfUpdate.trusted(apk) -> openInBrowser(context, latest.pageUrl)
-                                !SelfUpdate.canInstall(context) -> {
-                                    android.widget.Toast.makeText(context, tr("Allow Batwallet to install updates, then tap Update again"),
-                                        android.widget.Toast.LENGTH_LONG).show()
-                                    SelfUpdate.openInstallPermission(context)
-                                }
-                                else -> {
-                                    error = null
-                                    progress = 0f
-                                    scope.launch {
-                                        error = SelfUpdate.downloadAndInstall(context, apk!!) { progress = it }
-                                        progress = null
-                                    }
-                                }
+                    // Downloaded and installed by the app (progress in its own dialog); the APK is deleted afterwards.
+                    val busy = SelfUpdate.state !is SelfUpdate.State.Idle && SelfUpdate.state !is SelfUpdate.State.Failed
+                    OutlinedButton(enabled = !busy, onClick = {
+                        val apk = latest.apkUrl
+                        when {
+                            !SelfUpdate.trusted(apk) -> openInBrowser(context, latest.pageUrl)
+                            !SelfUpdate.canInstall(context) -> {
+                                android.widget.Toast.makeText(context, tr("Allow Batwallet to install updates, then tap Update again"),
+                                    android.widget.Toast.LENGTH_LONG).show()
+                                SelfUpdate.openInstallPermission(context)
                             }
-                        }) { Text("Update") }
-                        TextButton(onClick = { openInBrowser(context, latest.pageUrl) }) { Text("What's new") }
+                            else -> SelfUpdate.start(context, apk!!, latest.version)
+                        }
+                    }) { Text("Update") }
+                }
+                else -> {
+                    Text("You have the latest version.", style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(top = 8.dp))
+                    // This version's notes: the latest release is usually this one, otherwise ask GitHub for it.
+                    var showNotes by remember { mutableStateOf(false) }
+                    var notes by remember { mutableStateOf<String?>(null) }
+                    val current = BatApp.appVersion(context)
+                    if (!showNotes) {
+                        TextButton(onClick = { showNotes = true }, contentPadding = PaddingValues(0.dp)) {
+                            Text(tr("What's new in") + " " + current)
+                        }
+                    } else {
+                        LaunchedEffect(Unit) {
+                            notes = if (latest.version == current && latest.notes.isNotBlank()) latest.notes
+                            else releaseNotes(current) ?: ""
+                        }
+                        when (val n = notes) {
+                            null -> CircularProgressIndicator(Modifier.padding(top = 8.dp).size(16.dp), strokeWidth = 2.dp)
+                            "" -> Text("Couldn't reach GitHub. Try again later.", style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.error)
+                            else -> ReleaseNotes(n, Modifier.padding(vertical = 8.dp).heightIn(max = 320.dp)
+                                .verticalScroll(rememberScrollState()))
+                        }
                     }
                 }
-                else -> Text("You have the latest version.", style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(top = 8.dp))
             }
         }
         SettingGroup(
