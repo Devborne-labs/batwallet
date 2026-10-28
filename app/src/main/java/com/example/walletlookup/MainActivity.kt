@@ -1637,7 +1637,7 @@ private fun WalletsTab(
                         while (held) {
                             withFrameNanos { }
                             if (drag.edge != 0) {
-                                drag.dy += listState.dispatchRawDelta(drag.edge * 14f)
+                                listState.dispatchRawDelta(drag.edge * 14f) // the row stays under the finger by itself
                                 drag.moved()
                             }
                         }
@@ -1658,7 +1658,8 @@ private fun WalletsTab(
                         }
                     }
                     pg.sections.forEach { (group, wallets) ->
-                        val isCollapsed = group in collapsed
+                        // While a folder is being dragged every folder shows just its name (back as before on release).
+                        val isCollapsed = group in collapsed || drag.draggingFolder
                         val showHeader = pg.sections.size > 1 || group.isNotBlank()
                         if (showHeader) {
                             item(key = "group:$group") {
@@ -1697,11 +1698,12 @@ private fun WalletsTab(
                                                 )
                                             }
                                         }
-                                        if (editOrder && pg.orderedNames.size > 1) {
-                                            DragHandle(drag, "group:$group", pg.orderedNames.map { "group:$it" }) { a, b ->
-                                                adoptShownOrder(pg)
-                                                onSwapGroups(a.removePrefix("group:"), b.removePrefix("group:"), pg.orderedNames)
-                                            }
+                                    }
+                                    // Named folders move; "Other" (no folder) always stays last.
+                                    if (editOrder && pg.orderedNames.size > 1 && group in pg.orderedNames) {
+                                        DragHandle(drag, "group:$group", pg.orderedNames.map { "group:$it" }) { a, b ->
+                                            adoptShownOrder(pg)
+                                            onSwapGroups(a.removePrefix("group:"), b.removePrefix("group:"), pg.orderedNames)
                                         }
                                     }
                                 }
@@ -1930,7 +1932,8 @@ private fun UnderlineTab(label: String, selected: Boolean, modifier: Modifier, o
 /** Drag-to-reorder state for the Wallets list: which row is held and how far it has moved. */
 private class Reorder(val list: LazyListState) {
     var key by mutableStateOf<String?>(null)
-    var dy by mutableFloatStateOf(0f)
+    /** Where the held row's top should be on screen: follows the finger, whatever the list does underneath. */
+    var top by mutableFloatStateOf(0f)
     /** -1, 0 or 1: the held row is at the top edge, in the middle, or at the bottom edge (auto-scroll). */
     var edge = 0
     var peers: List<String> = emptyList()
@@ -1939,19 +1942,29 @@ private class Reorder(val list: LazyListState) {
     private var settleFrom: Int? = null
     private var settleWait = 0
 
-    fun start(k: String) { key = k; dy = 0f; edge = 0; settleFrom = null }
-    fun stop() { key = null; dy = 0f; edge = 0; settleFrom = null }
+    /** True while a folder is held: the list then shows folder names only, so folders swap like a short list. */
+    val draggingFolder: Boolean get() = key?.startsWith("group:") == true
+
+    private fun row(k: String) = list.layoutInfo.visibleItemsInfo.firstOrNull { it.key == k }
+
+    fun start(k: String) {
+        key = k; edge = 0; settleFrom = null
+        top = row(k)?.offset?.toFloat() ?: 0f
+    }
+    fun stop() { key = null; edge = 0; settleFrom = null }
+
+    /** How far the held row is drawn from its place in the list, so it stays under the finger. */
+    fun shift(k: String): Float = row(k)?.let { top - it.offset } ?: 0f
 
     /** The held row moved (finger or auto-scroll): note the edge, and swap with the row it now covers. */
     fun moved() {
         val k = key ?: return
         val info = list.layoutInfo
-        val cur = info.visibleItemsInfo.firstOrNull { it.key == k } ?: return
+        val cur = row(k) ?: return
         settleFrom?.let { from ->
             if (cur.offset == from && settleWait++ < 10) return
             settleFrom = null
         }
-        val top = cur.offset + dy
         val margin = 48f
         edge = when {
             top < info.viewportStartOffset + margin -> -1
@@ -1964,13 +1977,12 @@ private class Reorder(val list: LazyListState) {
         settleFrom = cur.offset
         settleWait = 0
         onSwap(k, target.key as String)
-        dy += cur.offset - target.offset // the row jumps to the target's place; keep it under the finger
     }
 }
 
 /** The held row follows your finger and floats above the others. */
 private fun Modifier.dragged(r: Reorder, key: String): Modifier =
-    if (r.key == key) zIndex(1f).graphicsLayer { translationY = r.dy; shadowElevation = 12f } else this
+    if (r.key == key) zIndex(1f).graphicsLayer { translationY = r.shift(key); shadowElevation = 12f } else this
 
 /**
  * Drag to reorder among [peers]: straight away on the ≡ handle, or after holding the row ([afterHold]) so a plain
@@ -1985,7 +1997,7 @@ private fun Modifier.reorderable(r: Reorder, key: String, peers: List<String>, a
             change.consume()
             r.peers = peersNow
             r.onSwap = swapNow
-            r.dy += amount.y
+            r.top += amount.y
             r.moved()
         }
         if (afterHold) {

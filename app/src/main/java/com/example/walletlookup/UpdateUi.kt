@@ -1,6 +1,16 @@
 package com.example.walletlookup
 
+import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material3.Button
+import androidx.compose.material3.HorizontalDivider
+import androidx.compose.material3.Surface
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
@@ -18,28 +28,42 @@ import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import java.util.Locale
 
 /**
- * Release notes as written on GitHub, drawn simply: "- " lines become bullets, **bold** stays bold, links show their
- * text. The "Install:" line is left out (you're already in the app).
+ * Release notes as written on GitHub: "- " lines become bullets with the text lined up beside the dot, **bold** stays
+ * bold, links show their text. The "Install:" line is left out (you're already in the app), and so is a heading that
+ * only repeats the version ([skipVersionHeading], when the title already says it).
  */
 @Composable
-fun ReleaseNotes(text: String, modifier: Modifier = Modifier) {
-    Column(modifier, verticalArrangement = Arrangement.spacedBy(6.dp)) {
+fun ReleaseNotes(text: String, modifier: Modifier = Modifier, skipVersionHeading: String? = null) {
+    Column(modifier, verticalArrangement = Arrangement.spacedBy(10.dp)) {
         for (raw in text.lines()) {
             val line = raw.trim().removePrefix("#").removePrefix("#").removePrefix("#").trim()
             if (line.isEmpty() || line.startsWith("**Install:**")) continue
             val bullet = line.startsWith("- ") || line.startsWith("* ")
             val body = if (bullet) line.drop(2) else line
             val heading = !bullet && body.startsWith("**") && body.endsWith("**")
-            androidx.compose.material3.Text(
-                markdownLine((if (bullet) "•  " else "") + body),
-                style = if (heading) MaterialTheme.typography.titleSmall else MaterialTheme.typography.bodyMedium,
-                fontWeight = if (heading) FontWeight.SemiBold else null,
-                modifier = if (heading) Modifier.fillMaxWidth() else Modifier,
-            )
+            if (heading && skipVersionHeading != null && body.contains(skipVersionHeading)) continue
+            if (bullet) {
+                Row {
+                    Box(
+                        Modifier.padding(top = 8.dp, end = 12.dp).size(6.dp)
+                            .background(MaterialTheme.colorScheme.onSurface, CircleShape)
+                    )
+                    androidx.compose.material3.Text(markdownLine(body), style = MaterialTheme.typography.bodyMedium,
+                        modifier = Modifier.weight(1f))
+                }
+            } else {
+                androidx.compose.material3.Text(
+                    markdownLine(body),
+                    style = if (heading) MaterialTheme.typography.titleSmall else MaterialTheme.typography.bodyMedium,
+                    fontWeight = if (heading) FontWeight.SemiBold else null,
+                    modifier = Modifier.fillMaxWidth().padding(top = if (heading) 4.dp else 0.dp),
+                )
+            }
         }
     }
 }
@@ -98,10 +122,20 @@ fun UpdateProgressDialog() {
 /** Shown once after updating: what changed in this version. */
 @Composable
 fun WhatsNewDialog(version: String, notes: String, onDismiss: () -> Unit) {
-    AlertDialog(
-        onDismissRequest = onDismiss,
-        title = { Text(tr("What's new in") + " " + version) },
-        text = { ReleaseNotes(notes, Modifier.heightIn(max = 420.dp).verticalScroll(rememberScrollState())) },
-        confirmButton = { TextButton(onClick = onDismiss) { Text("OK") } },
-    )
+    Dialog(onDismissRequest = onDismiss) {
+        Surface(shape = RoundedCornerShape(28.dp), color = MaterialTheme.colorScheme.surface, tonalElevation = 6.dp) {
+            Column(Modifier.padding(24.dp)) {
+                Text("What's new", style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.SemiBold)
+                Text(tr("Batwallet") + " " + version, style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(top = 2.dp))
+                HorizontalDivider(Modifier.padding(vertical = 16.dp))
+                ReleaseNotes(
+                    notes,
+                    Modifier.weight(1f, fill = false).heightIn(max = 420.dp).verticalScroll(rememberScrollState()),
+                    skipVersionHeading = version,
+                )
+                Button(onClick = onDismiss, modifier = Modifier.fillMaxWidth().padding(top = 20.dp)) { Text("Got it") }
+            }
+        }
+    }
 }
