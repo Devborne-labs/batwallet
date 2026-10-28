@@ -26,7 +26,7 @@ Made by [@MalluWayne](https://t.me/MalluWayne) with Claude.
   </tr>
 </table>
 
-<sub>Screenshots use public exchange addresses as examples, which is why the totals are so large.</sub>
+<sub>Screenshots use public exchange addresses as examples, which is why the totals are so large - im poor .</sub>
 
 ## Features
 
