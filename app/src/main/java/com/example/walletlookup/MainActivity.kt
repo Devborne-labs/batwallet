@@ -657,7 +657,8 @@ private fun App(
                 throw e
             } catch (_: Exception) {
             }
-            store.loadActivity(w.address).forEach { s ->
+            // Only alert entries with a transaction ID: ones the alerts couldn't match have no details to open.
+            store.loadActivity(w.address).filter { it.hash != null }.forEach { s ->
                 val incoming = s.amount.signum() > 0
                 all += Triple(w.address, s.network, Transfer(
                     incoming, s.amount.abs(), if (incoming) s.from else s.to, s.time, null, s.hash, s.from, s.to, s.symbol,
@@ -892,6 +893,7 @@ private fun App(
         // Swipe left/right between Home, Wallets and Settings (the bottom bar and the pages stay in step).
         val pager = rememberPagerState(initialPage = tab) { 3 }
         LaunchedEffect(tab) { if (pager.currentPage != tab) pager.animateScrollToPage(tab) }
+        SettleHalfway(pager)
         LaunchedEffect(pager) {
             snapshotFlow { pager.settledPage }.collect { p ->
                 if (p != tab) {
@@ -1494,6 +1496,7 @@ private fun WalletsTab(
     var collapsed by remember { mutableStateOf(collapsedInit) }
     // Wallets and Contacts are two pages: tap the tabs or swipe between them.
     val sub = rememberPagerState { 2 }
+    SettleHalfway(sub)
     val showContacts = sub.currentPage == 1
     var renaming by remember { mutableStateOf<String?>(null) }
     // Drag handles only show in "Edit order" mode (from the ⋯ menu), so normal rows stay clean.
@@ -1981,6 +1984,21 @@ private class Reorder(val list: LazyListState) {
         settleFrom = cur.offset
         settleWait = 0
         onSwap(k, target.key as String)
+    }
+}
+
+/**
+ * A swipe handed from the inner Wallets/Contacts pager to the outer one could stop between two pages. When no swipe
+ * is going on and a pager sits part-way, finish the move to the nearest page.
+ */
+@Composable
+private fun SettleHalfway(pager: androidx.compose.foundation.pager.PagerState) {
+    LaunchedEffect(pager) {
+        snapshotFlow { pager.isScrollInProgress }.collect { scrolling ->
+            if (!scrolling && kotlin.math.abs(pager.currentPageOffsetFraction) > 0.001f) {
+                pager.animateScrollToPage(pager.currentPage)
+            }
+        }
     }
 }
 
