@@ -837,6 +837,10 @@ private fun knownPrices(): Map<String, Double> = priceCache?.second ?: runCatchi
 fun detailsWindowMs(symbol: String): Long =
     if (symbol.uppercase().startsWith("USD") || symbol.equals("TRX", true)) 86_400_000L else 3_600_000L
 
+/** A coin move worth less than a cent (fee change, the TON that comes back with a jetton transfer): not a payment. */
+fun isCoinDust(amount: BigDecimal, symbol: String): Boolean =
+    !symbol.uppercase().startsWith("USD") && (transferUsd(amount.abs(), symbol)?.let { it < BigDecimal("0.01") } ?: false)
+
 /** A transfer's value in USD: stablecoins at face value, coins at the latest known price; null without a price. */
 fun transferUsd(amount: BigDecimal, symbol: String): BigDecimal? {
     val sym = symbol.uppercase()

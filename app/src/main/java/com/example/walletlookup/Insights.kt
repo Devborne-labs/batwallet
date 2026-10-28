@@ -707,7 +707,31 @@ private fun tonHistory(a: String): History {
             )
         }
     }
-    return History("TON", items)
+    // TON coin transfers too (from the same free API); under 0.01 TON is the "excess" dust that comes back with
+    // every jetton transfer, left out.
+    runCatching {
+        val ev = JSONObject(http("https://tonapi.io/v2/accounts/$enc/events?limit=${minOf(LIMIT, 50)}")).getJSONArray("events")
+        for (i in 0 until ev.length()) {
+            val e = ev.getJSONObject(i)
+            val actions = e.getJSONArray("actions")
+            for (k in 0 until actions.length()) {
+                val act = actions.getJSONObject(k)
+                if (act.optString("status") != "ok") continue
+                val t = act.optJSONObject("TonTransfer") ?: continue
+                val nano = t.optLong("amount")
+                if (nano < 10_000_000L) continue
+                val sender = t.optJSONObject("sender")?.optString("address")?.lowercase()
+                val recipient = t.optJSONObject("recipient")?.optString("address")?.lowercase()
+                val incoming = recipient == me
+                items += Transfer(
+                    incoming, amount(BigInteger.valueOf(nano), 9), tonFriendly(if (incoming) sender else recipient),
+                    e.getLong("timestamp") * 1000, "https://tonviewer.com/transaction/" + e.getString("event_id"),
+                    e.getString("event_id"), tonFriendly(sender), tonFriendly(recipient), "TON",
+                )
+            }
+        }
+    }
+    return History("TON", items.sortedByDescending { it.time }.take(LIMIT))
 }
 
 /** The API gives "0:ab12…"; wallets show the "UQ…" form (non-bounceable, mainnet), so show that. */

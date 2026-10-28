@@ -378,7 +378,7 @@ object Alerts {
             }.map { it.first }.toSet()
             // Exchange wallets: money leaving is the exchange sweeping it, not a payment of yours, so it isn't kept.
             val exchangeWallet = isExchangeWallet(w.address, w.group, w.name)
-            store.addActivity(w.address, changes.filter { it.first !in fees }.flatMap { (key, diff) ->
+            store.addActivity(w.address, changes.filter { it.first !in fees && !isCoinDust(it.second, it.first.substringBefore("|")) }.flatMap { (key, diff) ->
                 val (sym, net) = key.split("|", limit = 2)
                 val split = parts[key]
                 if (split != null) split.map { t -> seenOf(sym, net, t, now) }

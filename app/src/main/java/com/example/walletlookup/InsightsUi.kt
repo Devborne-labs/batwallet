@@ -323,7 +323,7 @@ fun HistoryScreen(
                         }
                     }
                     // Payments the alerts caught that the blockchain list above doesn't already show (no doubles).
-                    val unmatched = seen.filter { s -> d.orEmpty().none { h -> h.network == s.network && h.items.any { sameTransfer(it, s) } } }
+                    val unmatched = seen.filter { s -> !isCoinDust(s.amount, s.symbol) && d.orEmpty().none { h -> h.network == s.network && h.items.any { sameTransfer(it, s) } } }
                     if (unmatched.isNotEmpty()) {
                         item(key = "seen") {
                             Spacer(Modifier.height(12.dp))

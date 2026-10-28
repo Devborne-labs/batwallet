@@ -662,7 +662,7 @@ private fun App(
             }
             // Payments the alerts saw without details: look for them now (blocks around that time, backup nodes).
             runCatching { Alerts.resolveMissing(context, w) }
-            store.loadActivity(w.address).filter { it.amount.signum() > 0 || !w.onExchange }.forEach { s ->
+            store.loadActivity(w.address).filter { (it.amount.signum() > 0 || !w.onExchange) && !isCoinDust(it.amount, it.symbol) }.forEach { s ->
                 val incoming = s.amount.signum() > 0
                 all += Triple(w.address, s.network, Transfer(
                     incoming, s.amount.abs(), if (incoming) s.from else s.to, s.time, null, s.hash, s.from, s.to, s.symbol,
@@ -720,7 +720,7 @@ private fun App(
         val listener = store.onActivityChanged { addr ->
             // Straight onto Home from what the alert saved (the full refresh below can take a while).
             store.loadAddresses().firstOrNull { it.address == addr && !it.contact && !it.archived && knownPlatform(it.address) == null }?.let { w ->
-                val fresh = store.loadActivity(addr).filter { it.amount.signum() > 0 || !w.onExchange }.take(5).map { s ->
+                val fresh = store.loadActivity(addr).filter { (it.amount.signum() > 0 || !w.onExchange) && !isCoinDust(it.amount, it.symbol) }.take(5).map { s ->
                     val incoming = s.amount.signum() > 0
                     Triple(addr, s.network, Transfer(incoming, s.amount.abs(), if (incoming) s.from else s.to, s.time, null,
                         s.hash, s.from, s.to, s.symbol))
@@ -921,15 +921,21 @@ private fun App(
         },
     ) { pad ->
         // Swipe left/right between Home, Wallets and Settings (the bottom bar and the pages stay in step).
-        // Swipe between Home, Wallets and Settings (one page each). Wallets / Contacts switch by tapping their tabs,
-        // so a sideways swipe always means the same thing.
-        val pager = rememberPagerState(initialPage = tab) { 3 }
-        LaunchedEffect(tab) { if (pager.currentPage != tab) pager.animateScrollToPage(tab) }
+        // Four pages in one row: Home, Wallets, Contacts, Settings. Every swipe moves exactly one page (Wallets and
+        // Contacts used to be a pager inside this one, and handing a swipe from one to the other made it stutter).
+        fun pageOf(t: Int) = when (t) { TAB_HOME -> 0; TAB_WALLETS -> 1 + walletsPage; else -> 3 }
+        val pager = rememberPagerState(initialPage = pageOf(tab)) { 4 }
+        LaunchedEffect(tab, walletsPage) {
+            val target = pageOf(tab)
+            if (pager.currentPage != target) pager.animateScrollToPage(target)
+        }
         LaunchedEffect(pager) {
             snapshotFlow { pager.settledPage }.collect { p ->
-                if (p != tab) {
+                if (p == 1 || p == 2) walletsPage = p - 1
+                val t = when (p) { 0 -> TAB_HOME; 1, 2 -> TAB_WALLETS; else -> TAB_SETTINGS }
+                if (t != tab) {
                     if (fromWallets) { fromWallets = false; address = "" }
-                    tab = p
+                    tab = t
                 }
             }
         }
@@ -941,7 +947,7 @@ private fun App(
             beyondViewportPageCount = 1,
         ) { page ->
         Column(Modifier.fillMaxSize()) {
-            if (page == TAB_SETTINGS) {
+            if (page == 3) {
                 Text(
                     "Settings",
                     style = MaterialTheme.typography.titleLarge,
@@ -950,7 +956,7 @@ private fun App(
                 )
             }
             when (page) {
-                TAB_HOME -> HomeTab(
+                0 -> HomeTab(
                     onOpenUpdate = { SelfUpdate.openInSettings = true; tab = TAB_SETTINGS },
                     saved = saved,
                     cache = cache,
@@ -989,13 +995,20 @@ private fun App(
                     onSeeAll = { tab = TAB_WALLETS },
                     platform = remember(address, homeHistory) { platformOf(address, homeHistory) },
                     // Also applied to the saved list, so sends from exchange wallets disappear straight away.
-                    recentTx = recentTx.filter { (w, _, t) -> t.incoming || saved.firstOrNull { it.address == w }?.onExchange != true },
+                    recentTx = recentTx.filter { (w, _, t) ->
+                        (t.incoming || saved.firstOrNull { it.address == w }?.onExchange != true) && !isCoinDust(t.amount, t.symbol)
+                    },
                     onOpenTx = { net, t -> homeTx = net to t },
                     onClearRecent = { store.clearRecent(); recent = emptyList() },
                 )
-                TAB_WALLETS -> WalletsTab(
-                    subPage = walletsPage,
+                1, 2 -> WalletsTab(
+                    subPage = page - 1,
                     onSubPage = { walletsPage = it },
+                    // Between Wallets and Contacts only the list slides; the header stays put (see WalletsTab).
+                    headerShift = {
+                        val o = (pager.currentPage - page) + pager.currentPageOffsetFraction
+                        if (page == 1) o.coerceIn(0f, 1f) else o.coerceIn(-1f, 0f)
+                    },
                     saved = saved,
                     cache = cache,
                     syncing = syncing,
@@ -1488,9 +1501,14 @@ private fun BalanceCard(
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun WalletsTab(
-    /** 0 = Wallets, 1 = Contacts (switched by tapping the tabs). */
+    /** 0 = Wallets, 1 = Contacts (each is its own page of the main swipe row). */
     subPage: Int,
     onSubPage: (Int) -> Unit,
+    /**
+     * How far this page is part-way towards the other of Wallets / Contacts (0 = settled, ±1 = fully the other).
+     * The header is held in place by that much and cross-fades, so swiping between the two looks like switching tabs.
+     */
+    headerShift: () -> Float = { 0f },
     saved: List<SavedAddress>,
     cache: Map<String, Cached>,
     syncing: Set<String>,
@@ -1587,7 +1605,13 @@ private fun WalletsTab(
 
     Column(Modifier.fillMaxSize()) {
         // Header: balance (tap to hide / show), + and ⋯, then the Wallets / Contacts tabs. Refresh is pull-down.
-        Column(Modifier.fillMaxWidth().padding(start = 16.dp, end = 12.dp, top = 12.dp)) {
+        Column(
+            Modifier.graphicsLayer {
+                val o = headerShift()
+                translationX = o * size.width
+                alpha = (1f - 2f * kotlin.math.abs(o)).coerceAtLeast(0f) // one fades out before the other fades in
+            }.fillMaxWidth().padding(start = 16.dp, end = 12.dp, top = 12.dp)
+        ) {
             if (selecting) {
                 val picked = saved.filter { it.address in selected }
                 val allArchived = picked.isNotEmpty() && picked.all { it.archived }
