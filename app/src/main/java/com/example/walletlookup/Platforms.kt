@@ -62,6 +62,9 @@ fun platformOf(address: String, history: List<History>?): Platform? {
 /** More sends than this means the address is run by a business or a bot, not a person. */
 private const val BUSY_SENDS = 10_000L
 
+/** A very busy address that isn't a known exchange wallet: a business or bot, never one person. */
+fun isBusyAddress(address: String, sentTx: Long): Boolean = sentTx >= BUSY_SENDS && knownPlatform(address) == null
+
 /** Exchanges whose deposit addresses are custodial: the exchange pays the network fees, so gas never matters. */
 private val EXCHANGES = listOf(
     "binance", "bybit", "okx", "coinbase", "kraken", "kucoin", "bitfinex", "gemini", "htx", "huobi", "gate",

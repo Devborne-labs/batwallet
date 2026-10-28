@@ -355,3 +355,5 @@ Hide	Скрыть	छिपाएं
 %s's own wallet: it holds many users' coins together.	Собственный кошелёк %s: в нём монеты многих пользователей.	%s का अपना वॉलेट: इसमें कई यूज़र्स के कॉइन एक साथ हैं।
 %s deposit address: the exchange moves the coins to its own wallets, so this isn't the account balance on %s.	Адрес для пополнения %s: биржа переводит монеты в свои кошельки, поэтому это не баланс аккаунта на %s.	%s डिपॉज़िट पता: एक्सचेंज कॉइन अपने वॉलेट में भेज देता है, इसलिए यह %s पर अकाउंट का बैलेंस नहीं है।
 Very busy address (%d transactions sent): this is an exchange, company or bot wallet, not one person's.	Очень активный адрес (%d отправленных транзакций): это кошелёк биржи, компании или бота, а не одного человека.	बहुत व्यस्त पता (%d लेन-देन भेजे गए): यह किसी एक्सचेंज, कंपनी या बॉट का वॉलेट है, किसी एक व्यक्ति का नहीं।
+Not a personal wallet	Не личный кошелёк	निजी वॉलेट नहीं
+Exchange wallet	Кошелёк биржи	एक्सचेंज वॉलेट

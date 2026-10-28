@@ -9,6 +9,7 @@ import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.Notifications
 import androidx.compose.material.icons.filled.Build
+import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material.icons.filled.Info
 import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.foundation.layout.widthIn
@@ -1231,22 +1232,17 @@ private fun HomeTab(
                 }
             }
             message?.let { m -> item { Text(m, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall) } }
+            // Not one person's balance: a very busy business / bot address (red warning) or an exchange wallet (note),
+            // shown above the balance so it's read first.
+            if (type != null && results.isNotEmpty()) {
+                val sentTx = results.mapNotNull { r -> r.rows.firstOrNull { it.first == "Transactions sent" }?.second?.toLongOrNull() }.maxOrNull() ?: 0
+                exchangeNote(address, platform, savedWallet?.group.orEmpty(), savedWallet?.name.orEmpty(), sentTx)?.let { note ->
+                    item { WalletNote(note, warning = isBusyAddress(address, sentTx)) }
+                }
+            }
             if (type != null && results.isNotEmpty()) item {
                 BalanceCard(type, results, resultsTime, loading,
                     exchange = isExchangeWallet(address, savedWallet?.group.orEmpty(), savedWallet?.name.orEmpty()))
-            }
-            // Exchange deposit address (or an exchange's own wallet): say why the balance isn't the person's.
-            if (type != null && results.isNotEmpty()) {
-                exchangeNote(
-                    address, platform, savedWallet?.group.orEmpty(), savedWallet?.name.orEmpty(),
-                    sentTx = results.mapNotNull { r -> r.rows.firstOrNull { it.first == "Transactions sent" }?.second?.toLongOrNull() }.maxOrNull() ?: 0,
-                )?.let { note ->
-                    item {
-                        Card(Modifier.fillMaxWidth()) {
-                            Text(note, style = MaterialTheme.typography.bodySmall, modifier = Modifier.padding(14.dp))
-                        }
-                    }
-                }
             }
             if (!tokens.isNullOrEmpty()) item { OtherTokensCard(tokens) }
             if (type != null) item { SafetyCard(safety, safetyLoading, twin, savedWallet, platform) }
@@ -2449,4 +2445,31 @@ private fun SlideIn(content: @Composable () -> Unit) {
         enter = androidx.compose.animation.fadeIn(tween(220)) +
             androidx.compose.animation.slideInHorizontally(tween(280)) { it / 8 },
     ) { content() }
+}
+
+/**
+ * Note shown above a wallet's balance when it isn't one person's money. [warning] (a very busy business / bot
+ * address) is red with a bold title so it can't be missed; exchange wallets get a calmer grey note.
+ */
+@Composable
+private fun WalletNote(text: String, warning: Boolean) {
+    val accent = if (warning) OutRed else MaterialTheme.colorScheme.onSurfaceVariant
+    Card(
+        Modifier.fillMaxWidth(),
+        colors = CardDefaults.cardColors(
+            containerColor = if (warning) OutRed.copy(alpha = 0.14f) else MaterialTheme.colorScheme.surfaceVariant,
+        ),
+    ) {
+        Row(Modifier.padding(14.dp), verticalAlignment = Alignment.Top) {
+            Icon(if (warning) Icons.Filled.Warning else Icons.Filled.Info, contentDescription = null, tint = accent,
+                modifier = Modifier.size(22.dp))
+            Spacer(Modifier.width(12.dp))
+            Column {
+                Text(if (warning) "Not a personal wallet" else "Exchange wallet", fontWeight = FontWeight.Bold,
+                    color = if (warning) OutRed else MaterialTheme.colorScheme.onSurface)
+                Spacer(Modifier.height(2.dp))
+                Text(text, style = MaterialTheme.typography.bodySmall)
+            }
+        }
+    }
 }
