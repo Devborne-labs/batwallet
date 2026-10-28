@@ -176,10 +176,16 @@ class Store(context: Context) {
         set(v) = prefs.edit().putString("group_order", JSONArray(v).toString()).apply()
 
     var currency: Fiat
-        get() = runCatching { Fiat.valueOf(prefs.getString("currency", Fiat.USD.name)!!) }.getOrDefault(Fiat.USD)
+        get() = runCatching { Fiat.valueOf(prefs.getString("currency", Fiat.USDT.name)!!) }.getOrDefault(Fiat.USDT)
         set(v) = prefs.edit().putString("currency", v.name).apply()
 
     /** Last known USD → currency rate, so values show instantly offline. */
+    /** USDT became the main currency in 16.3: switch once to it, after that your own choice stays. */
+    fun switchToUsdtOnce() {
+        if (prefs.getBoolean("usdt_default_done", false)) return
+        prefs.edit().putString("currency", Fiat.USDT.name).putFloat("currency_rate", 1f).putBoolean("usdt_default_done", true).apply()
+    }
+
     var currencyRate: Double
         get() = prefs.getFloat("currency_rate", 1f).toDouble()
         set(v) = prefs.edit().putFloat("currency_rate", v.toFloat()).apply()

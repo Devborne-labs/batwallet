@@ -927,6 +927,8 @@ private fun worth(stable: BigDecimal, native: BigDecimal, price: Double?): BigDe
 
 /** Currencies the app can show values in. Prices are fetched in USD and converted. */
 enum class Fiat(val code: String, val locale: Locale, val label: String) {
+    /** The main one: values shown as USDT (stablecoins count 1:1, coins at their USDT price). */
+    USDT("USDT", Locale.US, "Tether (USDT)"),
     USD("USD", Locale.US, "US dollar ($)"),
     INR("INR", Locale("en", "IN"), "Indian rupee (₹)"),
     EUR("EUR", Locale("en", "IE"), "Euro (€)"),
@@ -942,12 +944,14 @@ var fiatRate: Double by androidx.compose.runtime.mutableStateOf(1.0)
 
 /** USD → [code] exchange rate (open.er-api.com, free, no key). */
 fun fetchFiatRate(code: String): Double? = runCatching {
-    if (code == "USD") 1.0
+    if (code == "USD" || code == "USDT") 1.0
     else JSONObject(http("https://open.er-api.com/v6/latest/USD")).getJSONObject("rates").getDouble(code)
 }.getOrNull()
 
 private fun fiatFormat(usd: BigDecimal): String {
     val f = fiat
+    // USDT isn't an official currency code: shown as "1,234.56 USDT".
+    if (f == Fiat.USDT) return fmt2(usd) + " USDT"
     val nf = NumberFormat.getCurrencyInstance(f.locale).apply { currency = java.util.Currency.getInstance(f.code) }
     return nf.format(usd.multiply(BigDecimal.valueOf(fiatRate)))
 }

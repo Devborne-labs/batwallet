@@ -229,6 +229,7 @@ class MainActivity : FragmentActivity() {
         themeMode = store.theme
         lockEnabled = store.lockEnabled
         lockTimeout = store.lockTimeoutSec
+        store.switchToUsdtOnce()
         fiat = store.currency
         fiatRate = store.currencyRate
         // The lock always covers the whole app (locking only Wallets left the total visible on Home).
@@ -2127,7 +2128,10 @@ private fun SettingsTab(
             }
         }
         SettingGroup("Currency", fiat.label, open == "currency", { toggle("currency") }) {
-            Fiat.entries.forEach { f -> RadioRow(f == fiat, f.label) { fiat = f; store.currency = f } }
+            // USDT first; the usual currencies below it.
+            RadioRow(fiat == Fiat.USDT, Fiat.USDT.label) { fiat = Fiat.USDT; store.currency = Fiat.USDT }
+            Label("Other currencies")
+            Fiat.entries.filter { it != Fiat.USDT }.forEach { f -> RadioRow(f == fiat, f.label) { fiat = f; store.currency = f } }
         }
         }
         SettingsSection("Alerts & security") {
