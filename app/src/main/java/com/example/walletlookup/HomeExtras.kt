@@ -85,8 +85,7 @@ fun ActivitySection(items: List<Pair<SavedAddress, Seen>>) {
                             Text("${s.network} · ${shortDate(s.time / 1000)}", style = MaterialTheme.typography.labelSmall,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant)
                         }
-                        val amt = if (s.symbol.startsWith("USD")) fmt2(s.amount.abs()) else fmt(s.amount.abs())
-                        Text((if (incoming) "+" else "−") + hideable(amt) + " " + s.symbol,
+                        Text((if (incoming) "+" else "−") + hideable(transferValue(s.amount.abs(), s.symbol)),
                             fontWeight = if (incoming) FontWeight.SemiBold else FontWeight.Normal)
                     }
                 }
@@ -170,8 +169,8 @@ fun RecentTxSection(
                                 style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1,
                                 overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis)
                         }
-                        val amt = if (t.symbol.startsWith("USD")) fmt2(t.amount) else fmt(t.amount)
-                        Text((if (t.incoming) "+" else "−") + hideable(amt) + " " + t.symbol,
+                        // In your chosen currency; the coin amount is on the transaction's page.
+                        Text((if (t.incoming) "+" else "−") + hideable(transferValue(t.amount, t.symbol)),
                             fontWeight = FontWeight.SemiBold, color = if (t.incoming) InGreen else OutRed)
                     }
                 }

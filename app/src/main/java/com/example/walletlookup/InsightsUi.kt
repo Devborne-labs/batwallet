@@ -415,14 +415,12 @@ private fun TransferRow(t: Transfer, network: String, names: Map<String, String>
                 }
             }
             Spacer(Modifier.width(8.dp))
-            Column(horizontalAlignment = Alignment.End) {
-                Text(
-                    (if (t.incoming) "+" else "−") + hideable(amountText(t.amount, t.symbol)),
-                    fontWeight = FontWeight.SemiBold, maxLines = 1, softWrap = false,
-                    color = if (t.incoming) InGreen else OutRed,
-                )
-                Text(t.symbol, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-            }
+            // In your chosen currency, like Home; the coin amount is on the transaction's page.
+            Text(
+                (if (t.incoming) "+" else "−") + hideable(transferValue(t.amount, t.symbol)),
+                fontWeight = FontWeight.SemiBold, maxLines = 1, softWrap = false,
+                color = if (t.incoming) InGreen else OutRed,
+            )
         }
     }
 }
@@ -511,6 +509,11 @@ internal fun TransactionScreen(
                         style = MaterialTheme.typography.headlineMedium, fontWeight = FontWeight.SemiBold,
                         color = if (neutral) MaterialTheme.colorScheme.onSurface else if (t.incoming) InGreen else OutRed)
                 }
+                // Coins: what it's worth in your currency (stablecoins already are).
+                if (!t.symbol.uppercase().startsWith("USD")) transferUsd(t.amount, t.symbol)?.let { v ->
+                    Text("≈ " + hideable(money(v)), style = MaterialTheme.typography.titleMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant)
+                }
                 Text("$network · " + (if (t.time > 0) date(t.time / 1000) else tr("Pending")) + " · " + tr(status),
                     color = if (status == "Failed") OutRed else MaterialTheme.colorScheme.onSurfaceVariant,
                     style = MaterialTheme.typography.bodySmall)
@@ -564,7 +567,7 @@ private fun SeenRow(s: Seen, onClick: () -> Unit) {
                 Text("${s.network} · ${shortDate(s.time / 1000)}", style = MaterialTheme.typography.labelSmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
-            Text((if (incoming) "+" else "−") + hideable(amountText(s.amount.abs(), s.symbol)) + " " + s.symbol,
+            Text((if (incoming) "+" else "−") + hideable(transferValue(s.amount.abs(), s.symbol)),
                 fontWeight = FontWeight.SemiBold, color = if (incoming) InGreen else OutRed)
         }
     }

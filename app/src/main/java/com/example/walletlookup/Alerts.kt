@@ -233,9 +233,13 @@ object Alerts {
      * the blocks around the time it was noticed (a few per run). For up to a week; at most every 2 minutes per wallet.
      * Also run by the app itself when Home loads.
      */
-    suspend fun resolveMissing(context: Context, w: SavedAddress) = fillMissingDetails(Store(context), w)
+    suspend fun resolveMissing(context: Context, w: SavedAddress) {
+        kotlinx.coroutines.withTimeoutOrNull(15_000) { fillMissingDetails(Store(context), w) }
+    }
 
     private suspend fun fillMissingDetails(store: Store, w: SavedAddress) {
+        // An exchange's own wallet moves thousands of payments an hour: nothing useful to match there.
+        if (knownPlatform(w.address) != null) return
         val now = System.currentTimeMillis()
         // Fee entries saved by older versions (coin drop next to a stablecoin send): drop them.
         val saved = store.loadActivity(w.address)
@@ -279,9 +283,12 @@ object Alerts {
     suspend fun checkWallets(context: Context) = checking.withLock {
         val store = Store(context)
         if (!store.alertsEnabled) return@withLock
-        // Notifications in the app's language, even when the app isn't open.
+        // Notifications in the app's language and currency, even when the app isn't open.
         I18n.load(context)
         I18n.lang = store.language
+        fiat = store.currency
+        fiatRate = store.currencyRate
+        if (historyPrefs == null) historyPrefs = context.getSharedPreferences("history", Context.MODE_PRIVATE) // saved prices
 
         // Lighter checks: only the networks a wallet actually uses, with a full sweep every 20th run
         // (≈10 min in instant mode) to catch money arriving on a new network.
@@ -301,7 +308,8 @@ object Alerts {
             // Keep old values for networks that failed this time, so they don't look like changes later.
             store.saveSnapshot(w.address, (old ?: emptyMap()) + fresh)
             if (old == null) continue // first check: just remember the starting balances
-            fillMissingDetails(store, w)
+            // Never let the search for missing details hold up the alert itself.
+            kotlinx.coroutines.withTimeoutOrNull(15_000) { fillMissingDetails(store, w) }
 
             val changes = fresh.mapNotNull { (key, now) ->
                 val before = old[key] ?: return@mapNotNull null
@@ -376,11 +384,14 @@ object Alerts {
             val received = if (usdt.signum() != 0) usdt.signum() > 0 else worth.any { it.second.signum() > 0 }
             // Only the wallet's saved name is shown, never its address.
             val title = tr(if (received) "Received" else "Sent") + " · " + walletLabel(w)
+            // In your chosen currency first, like the app; coins also say the coin amount.
             val text = worth.joinToString("\n") { (key, diff) ->
                 val (sym, net) = key.split("|", limit = 2)
                 val sign = if (diff.signum() > 0) "+" else "−"
-                val f: (BigDecimal) -> String = if (sym == "USDT") ::fmt2 else ::fmt
-                "$sign${f(diff.abs())} $sym · $net · " + tr("balance") + " ${f(fresh[key] ?: BigDecimal.ZERO)} $sym"
+                val coin = !sym.uppercase().startsWith("USD")
+                val bal = fresh[key] ?: BigDecimal.ZERO
+                sign + transferValue(diff.abs(), sym) + (if (coin) " (${fmt(diff.abs())} $sym)" else "") + " · $net · " +
+                    tr("balance") + " " + transferValue(bal, sym)
             }
             // Payments at or above the "big payment" amount use a louder channel and say so.
             val bigMin = store.bigPayment

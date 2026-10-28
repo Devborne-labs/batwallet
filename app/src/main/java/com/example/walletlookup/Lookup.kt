@@ -784,8 +784,38 @@ private fun prices(): Map<String, Double> {
         val j = JSONObject(http("https://api.coingecko.com/api/v3/simple/price?vs_currencies=usd&ids=" + missing().keys.joinToString(",")))
         j.keys().forEach { out[it] = j.getJSONObject(it).optDouble("usd") }
     }
-    if (out.isNotEmpty()) priceCache = System.currentTimeMillis() to out.toMap()
+    if (out.isNotEmpty()) {
+        priceCache = System.currentTimeMillis() to out.toMap()
+        // Kept, so transfer values show right away next time the app opens (before prices are fetched again).
+        runCatching { historyPrefs?.edit()?.putString("last_prices", JSONObject(out.toMap()).toString())?.apply() }
+    }
     return out
+}
+
+/** The latest known coin prices (USD): this session's, else the ones saved last time. */
+private fun knownPrices(): Map<String, Double> = priceCache?.second ?: runCatching {
+    val j = JSONObject(historyPrefs?.getString("last_prices", null) ?: return emptyMap())
+    j.keys().asSequence().associateWith { j.getDouble(it) }
+}.getOrDefault(emptyMap())
+
+/** A transfer's value in USD: stablecoins at face value, coins at the latest known price; null without a price. */
+fun transferUsd(amount: BigDecimal, symbol: String): BigDecimal? {
+    val sym = symbol.uppercase()
+    if (sym.startsWith("USD") || sym == "DAI") return amount
+    val price = knownPrices()[SYM_GECKO[sym] ?: return null] ?: return null
+    return amount.multiply(BigDecimal.valueOf(price))
+}
+
+/**
+ * How lists show a transfer: its value in your chosen currency ("3.05 USDT", "$3.05"), so every row reads the same.
+ * The coin amount ("9.2636 TRX") is on the transaction's own page; it's only used here while no price is known.
+ */
+fun transferValue(amount: BigDecimal, symbol: String): String {
+    val usd = transferUsd(amount, symbol)
+        ?: return (if (symbol.uppercase().startsWith("USD")) fmt2(amount) else fmt(amount)) + " " + symbol
+    // Tiny moves (fees, dust) read "< 0.01 USDT" rather than a misleading "0.00 USDT".
+    val cent = BigDecimal("0.01").divide(BigDecimal.valueOf(fiatRate), 8, java.math.RoundingMode.HALF_UP)
+    return if (usd.signum() > 0 && usd < cent) "< " + money(cent) else money(usd)
 }
 
 /** CoinMarketCap ids for every coin the app prices (keyed by the CoinGecko-style ids used elsewhere). */

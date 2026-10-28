@@ -191,6 +191,8 @@ private fun logWindow(c: EvmHist, a: String, time: Long): List<Transfer> {
             val arr = resp.getJSONObject(k).optJSONArray("result") ?: continue
             for (m in 0 until arr.length()) logs += arr.getJSONObject(m)
         }
+        // A very busy wallet: too many transfers in the window to tell which ones made the change.
+        if (logs.size > 300) return emptyList()
     }
     // Times: one request per distinct block (only a handful in a 3-hour window for one wallet).
     val times = HashMap<Long, Long>()
