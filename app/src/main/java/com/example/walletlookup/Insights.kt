@@ -78,6 +78,89 @@ suspend fun history(raw: String, networks: Set<String>? = null, limit: Int = 25)
 }
 
 /**
+ * The transfer(s) behind a balance change the alerts saw without details ([change]: + in, − out). Usually one
+ * transfer of that amount; but when several happened between two checks (e.g. +100.01 in and −130 out shown as
+ * −29.99), the newest transfers before [time] that add up to it. Event-log networks are searched right around that
+ * time (works even when it's older than the normal history scan); others look further back in their history.
+ * Empty when nothing fits.
+ */
+suspend fun findTransfers(raw: String, network: String, symbol: String, change: java.math.BigDecimal, time: Long): List<Transfer> =
+    withContext(Dispatchers.IO) {
+        val a = rawAddress(raw)
+        val c = EVM_HIST.firstOrNull { it.name == network && it.chainId in LOG_NODES && it.symbol.equals(symbol, true) }
+        val candidates = if (c != null && detect(a) == AddrType.EVM) runCatching { logWindow(c, a, time) }.getOrNull()
+        else runCatching { history(raw, setOf(network), limit = 100) }.getOrNull()?.flatMap { it.items }
+            ?.filter { it.symbol.equals(symbol, true) && (it.time <= 0 || it.time in time - 3 * 3_600_000L..time + 15 * 60_000L) }
+        pickTransfers(candidates.orEmpty(), change, time)
+    }
+
+/** One transfer of exactly [change], else the newest ones up to [time] whose amounts add up to it. */
+fun pickTransfers(candidates: List<Transfer>, change: java.math.BigDecimal, time: Long): List<Transfer> {
+    val incoming = change.signum() > 0
+    candidates.filter { it.incoming == incoming && it.amount.compareTo(change.abs()) == 0 }
+        .minByOrNull { kotlin.math.abs(it.time - time) }?.let { return listOf(it) }
+    var sum = java.math.BigDecimal.ZERO
+    val picked = mutableListOf<Transfer>()
+    for (t in candidates.filter { it.time <= time + 5 * 60_000L }.sortedByDescending { it.time }.take(12)) {
+        picked += t
+        sum += if (t.incoming) t.amount else t.amount.negate()
+        if (picked.size > 1 && sum.compareTo(change) == 0) return picked
+    }
+    return emptyList()
+}
+
+/** Every transfer of the token in and out of [a] from 3 hours before [time] to 15 minutes after. */
+private fun logWindow(c: EvmHist, a: String, time: Long): List<Transfer> {
+    val node = LOG_NODES.getValue(c.chainId)
+    val me = "0x" + a.removePrefix("0x").lowercase().padStart(64, '0')
+    fun call(id: Int, method: String, params: JSONArray) =
+        JSONObject().put("jsonrpc", "2.0").put("id", id).put("method", method).put("params", params)
+    fun blockTime(n: Long) = BigInteger(JSONObject(node.post(call(1, "eth_getBlockByNumber", JSONArray().put("0x" + n.toString(16)).put(false)).toString()))
+        .getJSONObject("result").getString("timestamp").removePrefix("0x"), 16).toLong()
+    // Which blocks: estimate the block rate from the latest block and one 10,000 back.
+    val latest = BigInteger(JSONObject(node.post(call(1, "eth_blockNumber", JSONArray()).toString())).getString("result").removePrefix("0x"), 16).toLong()
+    val back = maxOf(0L, latest - 10_000)
+    val tLatest = blockTime(latest)
+    val perSec = (latest - back).toDouble() / maxOf(1L, tLatest - blockTime(back))
+    fun blockAt(sec: Long) = (latest - ((tLatest - sec) * perSec).toLong()).coerceIn(0L, latest)
+    val from = blockAt(time / 1000 - 3 * 3600)
+    val to = blockAt(time / 1000 + 15 * 60)
+    val step = if (node.backupsFullRange) node.chunk else minOf(node.chunk, LogNode.BACKUP_SPAN)
+    val ranges = generateSequence(from) { it + step }.takeWhile { it <= to }.map { it..minOf(to, it + step - 1) }.toList()
+    val logs = mutableListOf<JSONObject>()
+    ranges.chunked(maxOf(1, node.perRequest / 2)).forEach { part ->
+        val batch = JSONArray()
+        var id = 0
+        part.forEach { r ->
+            for (incoming in listOf(true, false)) {
+                val topics = if (incoming) JSONArray().put(TRANSFER_TOPIC).put(JSONObject.NULL).put(me) else JSONArray().put(TRANSFER_TOPIC).put(me)
+                batch.put(call(id++, "eth_getLogs", JSONArray().put(JSONObject()
+                    .put("fromBlock", "0x" + r.first.toString(16)).put("toBlock", "0x" + r.last.toString(16))
+                    .put("address", c.token).put("topics", topics))))
+            }
+        }
+        val resp = JSONArray(node.post(batch.toString(), step))
+        for (k in 0 until resp.length()) {
+            val arr = resp.getJSONObject(k).optJSONArray("result") ?: continue
+            for (m in 0 until arr.length()) logs += arr.getJSONObject(m)
+        }
+    }
+    // Times: one request per distinct block (only a handful in a 3-hour window for one wallet).
+    val times = HashMap<Long, Long>()
+    return logs.distinctBy { it.getString("transactionHash") + it.optString("logIndex") }.map { l ->
+        val block = BigInteger(l.getString("blockNumber").removePrefix("0x"), 16).toLong()
+        val topics = l.getJSONArray("topics")
+        val f = "0x" + topics.getString(1).takeLast(40)
+        val t = "0x" + topics.getString(2).takeLast(40)
+        val incoming = t.equals(a, ignoreCase = true)
+        val hash = l.getString("transactionHash")
+        val ts = times.getOrPut(block) { runCatching { blockTime(block) * 1000 }.getOrDefault(0L) }
+        Transfer(incoming, amount(BigInteger(l.getString("data").removePrefix("0x").ifEmpty { "0" }, 16), c.decimals),
+            if (incoming) f else t, ts, c.txBase + hash, hash, f, t, c.symbol)
+    }
+}
+
+/**
  * Stablecoin transfers under 1 cent are almost always "address poisoning" spam: scammers send dust from
  * a lookalike address so it shows up in your history and gets copied by mistake. They are hidden.
  */
@@ -224,13 +307,47 @@ private fun parseEtherscanStyle(c: EvmHist, a: String, j: JSONObject): History {
 @Volatile var historyPrefs: android.content.SharedPreferences? = null
 
 /** Public nodes that answer eth_getLogs without a key: the URL, blocks per call, and calls per request. */
-private class LogNode(val rpc: String, val chunk: Long, val perRequest: Int)
+/**
+ * A free node for event-log history, plus [backups] tried in turn when it fails. Backups that only take small block
+ * windows ([backupsFullRange] false, at most [BACKUP_SPAN] blocks) are used only for requests that fit.
+ */
+private class LogNode(
+    val rpc: String, val chunk: Long, val perRequest: Int,
+    val backups: List<String> = emptyList(), val backupsFullRange: Boolean = false,
+) {
+    /** Sends a JSON-RPC request (or batch) covering up to [span] blocks; the first node that answers without errors wins. */
+    fun post(body: String, span: Long = 0): String {
+        val nodes = listOf(rpc) + backups.filter { backupsFullRange || span <= BACKUP_SPAN }
+        var last: Exception? = null
+        for (url in nodes) {
+            try {
+                val text = http(url, body).trim()
+                val ok = if (text.startsWith("[")) {
+                    val arr = JSONArray(text)
+                    (0 until arr.length()).none { arr.getJSONObject(it).has("error") }
+                } else JSONObject(text).let { !it.has("error") && it.has("result") }
+                if (ok) return text
+                last = java.io.IOException("HTTP " + text.take(120))
+            } catch (e: Exception) {
+                last = e
+            }
+        }
+        throw last ?: java.io.IOException("No node answered")
+    }
+
+    companion object {
+        const val BACKUP_SPAN = 10_000L
+    }
+}
 private val LOG_NODES = mapOf(
-    56L to LogNode("https://rpc-bsc.48.club", 5_000, 12),     // BSC: 5,000 blocks (~40 min) per call, sequential only
-    146L to LogNode("https://rpc.soniclabs.com", 10_000_000, 10), // Sonic: whole chain in a few calls
-    137L to LogNode("https://polygon-bor-rpc.publicnode.com", 10_000, 10), // Polygon: ~5.5 h per call
-    42161L to LogNode("https://arb1.arbitrum.io/rpc", 1_000_000, 4), // Arbitrum: ~3 days per call
-    8453L to LogNode("https://base-rpc.publicnode.com", 25_000, 4), // Base: ~14 h per call
+    // BSC: 5,000 blocks (~40 min) per call, sequential only. Backup takes the same requests.
+    56L to LogNode("https://rpc-bsc.48.club", 5_000, 12, listOf("https://bsc-rpc.publicnode.com"), backupsFullRange = true),
+    // Sonic: whole chain in a few calls; the backup only small windows (searching around one payment).
+    146L to LogNode("https://rpc.soniclabs.com", 10_000_000, 10, listOf("https://sonic.drpc.org")),
+    // Polygon: ~5.5 h per call. Backup takes the same requests.
+    137L to LogNode("https://polygon-bor-rpc.publicnode.com", 10_000, 10, listOf("https://polygon.drpc.org"), backupsFullRange = true),
+    42161L to LogNode("https://arb1.arbitrum.io/rpc", 1_000_000, 4, listOf("https://arbitrum.drpc.org")), // Arbitrum: ~3 days per call
+    8453L to LogNode("https://base-rpc.publicnode.com", 25_000, 4, listOf("https://base.drpc.org")), // Base: ~14 h per call
 )
 
 /**
@@ -247,7 +364,7 @@ private fun logHistory(c: EvmHist, a: String, maxRequests: Int = 4 + (LIMIT - 25
     val cached = historyPrefs?.getString(key, null)?.let { runCatching { JSONObject(it) }.getOrNull() }
     val found = LinkedHashMap<String, JSONObject>() // "hash:logIndex" -> log
     cached?.optJSONArray("logs")?.let { arr -> for (i in 0 until arr.length()) arr.getJSONObject(i).let { found[it.getString("k")] = it } }
-    val latest = BigInteger(JSONObject(http(node.rpc, call(1, "eth_blockNumber", JSONArray()).toString()))
+    val latest = BigInteger(JSONObject(node.post(call(1, "eth_blockNumber", JSONArray()).toString()))
         .getString("result").removePrefix("0x"), 16).toLong()
     var newest = cached?.optLong("newest", -1L)?.takeIf { it >= 0 } ?: latest
     var oldest = cached?.optLong("oldest", -1L)?.takeIf { it >= 0 } ?: (latest + 1)
@@ -263,7 +380,7 @@ private fun logHistory(c: EvmHist, a: String, maxRequests: Int = 4 + (LIMIT - 25
             batch.put(call(i * 2, "eth_getLogs", filter(JSONArray().put(TRANSFER_TOPIC).put(me))))
             batch.put(call(i * 2 + 1, "eth_getLogs", filter(JSONArray().put(TRANSFER_TOPIC).put(JSONObject.NULL).put(me))))
         }
-        val text = http(node.rpc, batch.toString()).trim()
+        val text = node.post(batch.toString(), ranges.maxOf { it.last - it.first + 1 })
         // A busy node sometimes answers a batch with a single error object instead of a list.
         if (!text.startsWith("[")) {
             val err = runCatching { JSONObject(text).optJSONObject("error")?.optString("message") }.getOrNull()
@@ -330,7 +447,7 @@ private fun logHistory(c: EvmHist, a: String, maxRequests: Int = 4 + (LIMIT - 25
         missing.chunked(20).forEach { part ->
             val batch = JSONArray()
             part.forEachIndexed { i, b -> batch.put(call(i, "eth_getBlockByNumber", JSONArray().put("0x" + b.toString(16)).put(false))) }
-            val text = http(node.rpc, batch.toString()).trim()
+            val text = runCatching { node.post(batch.toString()) }.getOrNull() ?: return@forEach
             if (!text.startsWith("[")) return@forEach
             val resp = JSONArray(text)
             val times = HashMap<Long, Long>()
@@ -354,7 +471,7 @@ private fun logHistory(c: EvmHist, a: String, maxRequests: Int = 4 + (LIMIT - 25
             l.optLong("ts", 0L), c.txBase + hash, hash, from, to, c.symbol)
     }
     val since = if (oldest <= latest) runCatching {
-        BigInteger(JSONObject(http(node.rpc, call(1, "eth_getBlockByNumber", JSONArray().put("0x" + oldest.toString(16)).put(false)).toString()))
+        BigInteger(JSONObject(node.post(call(1, "eth_getBlockByNumber", JSONArray().put("0x" + oldest.toString(16)).put(false)).toString()))
             .getJSONObject("result").getString("timestamp").removePrefix("0x"), 16).toLong()
     }.getOrNull() else null
     return History(

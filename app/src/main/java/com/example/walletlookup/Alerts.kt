@@ -207,7 +207,12 @@ object Alerts {
     }
 
     private val STABLES = setOf("USDT", "USDC")
+
+    /** An alert entry for one actual transfer (signed amount, its own time and details). */
+    private fun seenOf(sym: String, net: String, t: Transfer, fallbackTime: Long) =
+        Seen(sym, net, if (t.incoming) t.amount else t.amount.negate(), t.time.takeIf { it > 0 } ?: fallbackTime, t.hash, t.from, t.to)
     private const val DAY_MS = 24 * 3_600_000L
+    private const val WEEK_MS = 7 * DAY_MS
     private val lastFill = HashMap<String, Long>()
 
     /**
@@ -224,8 +229,12 @@ object Alerts {
 
     /**
      * Payments noticed before their transaction could be found (the free node hadn't caught up, or the lookup failed)
-     * get their sender, receiver and transaction ID filled in on later checks, for up to a day; at most every 2 minutes.
+     * get their sender, receiver and transaction ID filled in later: first from recent history, then by searching
+     * the blocks around the time it was noticed (a few per run). For up to a week; at most every 2 minutes per wallet.
+     * Also run by the app itself when Home loads.
      */
+    suspend fun resolveMissing(context: Context, w: SavedAddress) = fillMissingDetails(Store(context), w)
+
     private suspend fun fillMissingDetails(store: Store, w: SavedAddress) {
         val now = System.currentTimeMillis()
         // Fee entries saved by older versions (coin drop next to a stablecoin send): drop them.
@@ -236,7 +245,7 @@ object Alerts {
             }
         }
         if (acts.size != saved.size) store.saveActivity(w.address, acts)
-        if (acts.none { it.hash == null && now - it.time < DAY_MS }) return
+        if (acts.none { it.hash == null && now - it.time < WEEK_MS }) return
         if (now - (lastFill[w.address] ?: 0L) < 2 * 60_000L) return
         lastFill[w.address] = now
         val recent = try {
@@ -248,14 +257,22 @@ object Alerts {
         }
         val taken = acts.mapNotNull { it.hash }.toMutableSet()
         var changed = false
-        val updated = acts.map { s ->
-            if (s.hash != null || now - s.time >= DAY_MS) return@map s
-            val m = matchTransfer(recent, s.symbol, s.network, s.amount, s.time, taken) ?: return@map s
-            m.hash?.let { taken += it }
+        var searches = 0
+        val updated = acts.flatMap { s ->
+            if (s.hash != null || now - s.time >= WEEK_MS) return@flatMap listOf(s)
+            val near = recent.filter { (n, t) -> n == s.network && t.symbol.equals(s.symbol, true) && (t.hash == null || t.hash !in taken) }
+            // Recent history first; then a search of the blocks around that time (a few per run).
+            val found = pickTransfers(near.map { it.second }, s.amount, s.time).ifEmpty {
+                if (searches++ < 3) runCatching { findTransfers(w.address, s.network, s.symbol, s.amount, s.time) }.getOrDefault(emptyList())
+                    .filter { it.hash == null || it.hash !in taken }
+                else emptyList()
+            }
+            if (found.isEmpty()) return@flatMap listOf(s)
+            found.forEach { t -> t.hash?.let { taken += it } }
             changed = true
-            s.copy(time = m.time.takeIf { it > 0 } ?: s.time, hash = m.hash, from = m.from, to = m.to)
+            found.map { t -> seenOf(s.symbol, s.network, t, s.time) }
         }
-        if (changed) store.saveActivity(w.address, updated)
+        if (changed) store.saveActivity(w.address, updated.sortedByDescending { it.time })
     }
 
     /** Compare every saved wallet with its last known balances and notify about any change. */
@@ -321,6 +338,13 @@ object Alerts {
                 val (sym, net) = key.split("|", limit = 2)
                 key to matchTransfer(recent, sym, net, diff, now, taken)?.also { m -> m.hash?.let { taken += it } }
             }
+            // Several transfers between two checks show up as one net change (+100.01 and −130 as −29.99): record
+            // the actual transfers instead of a payment that never happened.
+            val parts = changes.filter { matches[it.first] == null }.associate { (key, diff) ->
+                val (sym, net) = key.split("|", limit = 2)
+                key to pickTransfers(recent.filter { (n, t) -> n == net && t.symbol.equals(sym, true) && (t.hash == null || t.hash !in taken) }
+                    .map { it.second }, diff, now).also { list -> list.forEach { t -> t.hash?.let { taken += it } } }
+            }.filterValues { it.isNotEmpty() }
             // The coin dropping a little while a stablecoin was sent on the same network is that send's fee,
             // not a payment of its own: leave it out (it was listed as a separate "sent" before).
             val fees = changes.filter { (key, diff) ->
@@ -330,11 +354,12 @@ object Alerts {
             }.map { it.first }.toSet()
             // Exchange wallets: money leaving is the exchange sweeping it, not a payment of yours, so it isn't kept.
             val exchangeWallet = isExchangeWallet(w.address, w.group, w.name)
-            store.addActivity(w.address, changes.filter { it.first !in fees && (!exchangeWallet || it.second.signum() > 0) }.map { (key, diff) ->
+            store.addActivity(w.address, changes.filter { it.first !in fees }.flatMap { (key, diff) ->
                 val (sym, net) = key.split("|", limit = 2)
-                val match = matches[key]
-                Seen(sym, net, diff, match?.time?.takeIf { it > 0 } ?: now, match?.hash, match?.from, match?.to)
-            })
+                val split = parts[key]
+                if (split != null) split.map { t -> seenOf(sym, net, t, now) }
+                else matches[key].let { m -> listOf(Seen(sym, net, diff, m?.time?.takeIf { it > 0 } ?: now, m?.hash, m?.from, m?.to)) }
+            }.filter { !exchangeWallet || it.amount.signum() > 0 })
 
             // Respect the "only alert above" setting; small coin moves (gas fees) are skipped when a minimum is set.
             val min = BigDecimal(store.alertMin)

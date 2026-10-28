@@ -517,8 +517,8 @@ internal fun TransactionScreen(
             }
             if (!neutral && t.hash == null && t.from == null && t.to == null) {
                 item {
-                    Text("Detected from a balance change before transaction details were recorded, so the sender, receiver " +
-                        "and transaction ID aren't available for this one. New alerts include them.",
+                    Text("Noticed from a balance change. The sender, receiver and transaction ID haven't been found yet; " +
+                        "the app keeps searching (also on backup nodes) and fills them in here when found.",
                         style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 }
             }

@@ -660,8 +660,9 @@ private fun App(
                 throw e
             } catch (_: Exception) {
             }
-            // Only alert entries with a transaction ID: ones the alerts couldn't match have no details to open.
-            store.loadActivity(w.address).filter { it.hash != null && (it.amount.signum() > 0 || !w.onExchange) }.forEach { s ->
+            // Payments the alerts saw without details: look for them now (blocks around that time, backup nodes).
+            runCatching { Alerts.resolveMissing(context, w) }
+            store.loadActivity(w.address).filter { it.amount.signum() > 0 || !w.onExchange }.forEach { s ->
                 val incoming = s.amount.signum() > 0
                 all += Triple(w.address, s.network, Transfer(
                     incoming, s.amount.abs(), if (incoming) s.from else s.to, s.time, null, s.hash, s.from, s.to, s.symbol,
@@ -894,21 +895,15 @@ private fun App(
         },
     ) { pad ->
         // Swipe left/right between Home, Wallets and Settings (the bottom bar and the pages stay in step).
-        // Four pages in one row: Home, Wallets, Contacts, Settings. Every swipe moves exactly one page (Wallets and
-        // Contacts used to be a pager inside this one, and handing a swipe from one to the other made it stutter).
-        fun pageOf(t: Int) = when (t) { TAB_HOME -> 0; TAB_WALLETS -> 1 + walletsPage; else -> 3 }
-        val pager = rememberPagerState(initialPage = pageOf(tab)) { 4 }
-        LaunchedEffect(tab, walletsPage) {
-            val target = pageOf(tab)
-            if (pager.currentPage != target) pager.animateScrollToPage(target)
-        }
+        // Swipe between Home, Wallets and Settings (one page each). Wallets / Contacts switch by tapping their tabs,
+        // so a sideways swipe always means the same thing.
+        val pager = rememberPagerState(initialPage = tab) { 3 }
+        LaunchedEffect(tab) { if (pager.currentPage != tab) pager.animateScrollToPage(tab) }
         LaunchedEffect(pager) {
             snapshotFlow { pager.settledPage }.collect { p ->
-                if (p == 1 || p == 2) walletsPage = p - 1
-                val t = when (p) { 0 -> TAB_HOME; 1, 2 -> TAB_WALLETS; else -> TAB_SETTINGS }
-                if (t != tab) {
+                if (p != tab) {
                     if (fromWallets) { fromWallets = false; address = "" }
-                    tab = t
+                    tab = p
                 }
             }
         }
@@ -920,7 +915,7 @@ private fun App(
             beyondViewportPageCount = 1,
         ) { page ->
         Column(Modifier.fillMaxSize()) {
-            if (page == 3) {
+            if (page == TAB_SETTINGS) {
                 Text(
                     "Settings",
                     style = MaterialTheme.typography.titleLarge,
@@ -929,7 +924,7 @@ private fun App(
                 )
             }
             when (page) {
-                0 -> HomeTab(
+                TAB_HOME -> HomeTab(
                     onOpenUpdate = { SelfUpdate.openInSettings = true; tab = TAB_SETTINGS },
                     saved = saved,
                     cache = cache,
@@ -972,14 +967,9 @@ private fun App(
                     onOpenTx = { net, t -> homeTx = net to t },
                     onClearRecent = { store.clearRecent(); recent = emptyList() },
                 )
-                1, 2 -> WalletsTab(
-                    subPage = page - 1,
+                TAB_WALLETS -> WalletsTab(
+                    subPage = walletsPage,
                     onSubPage = { walletsPage = it },
-                    // Between Wallets and Contacts only the list slides; the header stays put (see WalletsTab).
-                    headerShift = {
-                        val o = (pager.currentPage - page) + pager.currentPageOffsetFraction
-                        if (page == 1) o.coerceIn(0f, 1f) else o.coerceIn(-1f, 0f)
-                    },
                     saved = saved,
                     cache = cache,
                     syncing = syncing,
@@ -1472,14 +1462,9 @@ private fun BalanceCard(
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun WalletsTab(
-    /** 0 = Wallets, 1 = Contacts (each is its own page of the main swipe row). */
+    /** 0 = Wallets, 1 = Contacts (switched by tapping the tabs). */
     subPage: Int,
     onSubPage: (Int) -> Unit,
-    /**
-     * How far this page is part-way towards the other of Wallets / Contacts (0 = settled, ±1 = fully the other).
-     * The header is held in place by that much and cross-fades, so swiping between the two looks like switching tabs.
-     */
-    headerShift: () -> Float = { 0f },
     saved: List<SavedAddress>,
     cache: Map<String, Cached>,
     syncing: Set<String>,
@@ -1576,13 +1561,7 @@ private fun WalletsTab(
 
     Column(Modifier.fillMaxSize()) {
         // Header: balance (tap to hide / show), + and ⋯, then the Wallets / Contacts tabs. Refresh is pull-down.
-        Column(
-            Modifier.graphicsLayer {
-                val o = headerShift()
-                translationX = o * size.width
-                alpha = (1f - 2f * kotlin.math.abs(o)).coerceAtLeast(0f) // one fades out before the other fades in
-            }.fillMaxWidth().padding(start = 16.dp, end = 12.dp, top = 12.dp)
-        ) {
+        Column(Modifier.fillMaxWidth().padding(start = 16.dp, end = 12.dp, top = 12.dp)) {
             if (selecting) {
                 val picked = saved.filter { it.address in selected }
                 val allArchived = picked.isNotEmpty() && picked.all { it.archived }
