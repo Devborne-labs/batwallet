@@ -1235,6 +1235,19 @@ private fun HomeTab(
                 BalanceCard(type, results, resultsTime, loading,
                     exchange = isExchangeWallet(address, savedWallet?.group.orEmpty(), savedWallet?.name.orEmpty()))
             }
+            // Exchange deposit address (or an exchange's own wallet): say why the balance isn't the person's.
+            if (type != null && results.isNotEmpty()) {
+                exchangeNote(
+                    address, platform, savedWallet?.group.orEmpty(), savedWallet?.name.orEmpty(),
+                    sentTx = results.mapNotNull { r -> r.rows.firstOrNull { it.first == "Transactions sent" }?.second?.toLongOrNull() }.maxOrNull() ?: 0,
+                )?.let { note ->
+                    item {
+                        Card(Modifier.fillMaxWidth()) {
+                            Text(note, style = MaterialTheme.typography.bodySmall, modifier = Modifier.padding(14.dp))
+                        }
+                    }
+                }
+            }
             if (!tokens.isNullOrEmpty()) item { OtherTokensCard(tokens) }
             if (type != null) item { SafetyCard(safety, safetyLoading, twin, savedWallet, platform) }
         }
@@ -2194,16 +2207,21 @@ private fun SettingsTab(
             var pw by remember { mutableStateOf("") }
             var pw2 by remember { mutableStateOf("") }
             var busy by remember { mutableStateOf(false) }
+            // Show / Hide lets you check what you typed (the backup is unreadable without it).
+            var showPw by remember { mutableStateOf(false) }
+            val hideMask = if (showPw) androidx.compose.ui.text.input.VisualTransformation.None
+                else androidx.compose.ui.text.input.PasswordVisualTransformation()
+            val eye: @Composable () -> Unit = { TextButton(onClick = { showPw = !showPw }) { Text(if (showPw) "Hide" else "Show") } }
             AlertDialog(
                 onDismissRequest = { if (!busy) askExport = false },
                 title = { Text("Export backup") },
                 text = {
                     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                         OutlinedTextField(value = pw, onValueChange = { pw = it }, singleLine = true, label = { Text("Password (optional)") },
-                            visualTransformation = androidx.compose.ui.text.input.PasswordVisualTransformation())
+                            visualTransformation = hideMask, trailingIcon = eye)
                         if (pw.isNotEmpty()) OutlinedTextField(value = pw2, onValueChange = { pw2 = it }, singleLine = true,
                             label = { Text("Repeat password") }, isError = pw2.isNotEmpty() && pw2 != pw,
-                            visualTransformation = androidx.compose.ui.text.input.PasswordVisualTransformation())
+                            visualTransformation = hideMask)
                         if (pw.isNotEmpty()) Text("Without this password the backup can't be opened.",
                             style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                     }
@@ -2228,13 +2246,16 @@ private fun SettingsTab(
             var pw by remember { mutableStateOf("") }
             var wrong by remember { mutableStateOf(false) }
             var busy by remember { mutableStateOf(false) }
+            var showPw by remember { mutableStateOf(false) }
             AlertDialog(
                 onDismissRequest = { if (!busy) lockedImport = null },
                 title = { Text("Backup password") },
                 text = {
                     OutlinedTextField(value = pw, onValueChange = { pw = it; wrong = false }, singleLine = true, label = { Text("Password") },
                         isError = wrong, supportingText = { if (wrong) Text("Wrong password") },
-                        visualTransformation = androidx.compose.ui.text.input.PasswordVisualTransformation())
+                        visualTransformation = if (showPw) androidx.compose.ui.text.input.VisualTransformation.None
+                            else androidx.compose.ui.text.input.PasswordVisualTransformation(),
+                        trailingIcon = { TextButton(onClick = { showPw = !showPw }) { Text(if (showPw) "Hide" else "Show") } })
                 },
                 confirmButton = {
                     TextButton(enabled = pw.isNotEmpty() && !busy, onClick = {

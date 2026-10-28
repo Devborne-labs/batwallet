@@ -59,6 +59,9 @@ fun platformOf(address: String, history: List<History>?): Platform? {
     return null
 }
 
+/** More sends than this means the address is run by a business or a bot, not a person. */
+private const val BUSY_SENDS = 10_000L
+
 /** Exchanges whose deposit addresses are custodial: the exchange pays the network fees, so gas never matters. */
 private val EXCHANGES = listOf(
     "binance", "bybit", "okx", "coinbase", "kraken", "kucoin", "bitfinex", "gemini", "htx", "huobi", "gate",
@@ -69,4 +72,25 @@ private val EXCHANGES = listOf(
 fun isExchangeWallet(address: String, folder: String = "", name: String = ""): Boolean {
     val text = "$folder $name".lowercase()
     return knownPlatform(address) != null || EXCHANGES.any { it in text }
+}
+/**
+ * Why this address's balance may not be anyone's real balance: an exchange deposit address (the exchange moves the
+ * coins on to its own wallets and keeps the person's balance in its own records), or an exchange's own wallet
+ * (many users' coins together). Null for an ordinary wallet.
+ */
+fun exchangeNote(address: String, platform: Platform?, folder: String = "", name: String = "", sentTx: Long = 0): String? {
+    knownPlatform(address)?.let { return tr("%s's own wallet: it holds many users' coins together.").replace("%s", it) }
+    // Thousands of sends can't be done by hand (a hardware wallet asks to confirm each one): a business or exchange wallet.
+    if (sentTx >= BUSY_SENDS) {
+        return tr("Very busy address (%d transactions sent): this is an exchange, company or bot wallet, not one person's.")
+            .replace("%d", java.text.NumberFormat.getIntegerInstance().format(sentTx))
+    }
+    val text = "$folder $name".lowercase()
+    val exchange = platform?.takeIf { it.how.startsWith("Likely") }?.name
+        ?: EXCHANGES.firstOrNull { it in text }?.let { key ->
+            folder.takeIf { it.contains(key, ignoreCase = true) } ?: key.replaceFirstChar { it.uppercase() }
+        }
+        ?: return null
+    return tr("%s deposit address: the exchange moves the coins to its own wallets, so this isn't the account balance on %s.")
+        .replace("%s", exchange)
 }
