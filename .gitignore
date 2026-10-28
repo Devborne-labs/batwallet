@@ -1,0 +1,28 @@
+# Build output and caches
+build/
+.gradle/
+.kotlin/
+.idea/
+*.iml
+captures/
+.externalNativeBuild/
+.cxx/
+
+# This PC's SDK path (each computer has its own)
+local.properties
+
+# Signing keys and passwords: never upload these
+*.jks
+*.keystore
+keystore.properties
+
+# APKs go in GitHub Releases, not in the code
+*.apk
+*.aab
+
+# Wallet backups exported from the app
+batwallet-backup*.json
+
+# OS clutter
+.DS_Store
+Thumbs.db

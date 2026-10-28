@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Notification icon: white silhouette of the Batwallet logo. -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="24dp"
+    android:height="24dp"
+    android:viewportWidth="62"
+    android:viewportHeight="62">
+    <group android:translateX="-23" android:translateY="-23">
+        <path
+            android:fillColor="#FFFFFFFF"
+            android:pathData="M47.6,47.2 L32.7,43.5 L24,49.9 Q28.4,52.7 30,60.7 Q33.2,57 35.6,58.6 Q38.4,59.1 39.5,61.8 Q41.1,59.3 43.5,60.2 Q45.9,61.5 47.2,64.7 L54,59.9 Z M60.4,47.2 L75.3,43.5 L84,49.9 Q79.6,52.7 78,60.7 Q74.8,57 72.4,58.6 Q69.6,59.1 68.5,61.8 Q66.9,59.3 64.5,60.2 Q62.1,61.5 60.8,64.7 L54,59.9 Z M48.4,47.5 L49.5,39.6 L53,45.4 Z M59.6,47.5 L58.5,39.6 L55,45.4 Z M54,44.4 A9.6,9.6 0 1,1 53.99,44.4 Z" />
+    </group>
+</vector>

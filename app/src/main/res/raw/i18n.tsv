@@ -1,0 +1,350 @@
+# English	Russian	Hindi
+Home	Главная	होम
+Wallets	Кошельки	वॉलेट
+Settings	Настройки	सेटिंग्स
+Total	Итого	कुल
+Paste & check	Вставить и проверить	पेस्ट करें और जांचें
+Scan	Сканировать	स्कैन
+Your wallets	Ваши кошельки	आपके वॉलेट
+See all	Все	सभी देखें
+Recent transactions	Последние транзакции	हाल के लेन-देन
+Recent activity	Последняя активность	हाल की गतिविधि
+Recently checked	Недавно проверенные	हाल ही में जांचे गए
+Clear	Очистить	साफ़ करें
+Copy a wallet address and tap Paste & check, or scan its QR code. Save your own wallets to see them here.	Скопируйте адрес кошелька и нажмите «Вставить и проверить» или отсканируйте QR-код. Сохраните свои кошельки, чтобы видеть их здесь.	वॉलेट पता कॉपी करें और "पेस्ट करें और जांचें" दबाएं, या उसका QR कोड स्कैन करें। अपने वॉलेट यहां देखने के लिए उन्हें सेव करें।
+← Back	← Назад	← वापस
+← Home	← Главная	← होम
+← Wallets	← Кошельки	← वॉलेट
+Add	Добавить	जोड़ें
+Add wallet	Добавить кошелёк	वॉलेट जोड़ें
+Add contact	Добавить контакт	संपर्क जोड़ें
+Edit wallet	Изменить кошелёк	वॉलेट बदलें
+Save wallet	Сохранить кошелёк	वॉलेट सेव करें
+My wallet	Мой кошелёк	मेरा वॉलेट
+My wallets	Мои кошельки	मेरे वॉलेट
+Contact	Контакт	संपर्क
+Contacts	Контакты	संपर्क
+Sort	Сортировка	क्रम
+Value	Сумма	मूल्य
+Name	Имя	नाम
+Custom	Свой порядок	अपना क्रम
+Other	Другое	अन्य
+No folder	Без папки	कोई फ़ोल्डर नहीं
+Pinned	Закреплён	पिन किया
+Name (e.g. Ali)	Имя (напр. Али)	नाम (जैसे अली)
+Name (e.g. Trust wallet Aptos)	Название (напр. Trust Wallet Aptos)	नाम (जैसे Trust Wallet Aptos)
+Folder (optional)	Папка (необязательно)	फ़ोल्डर (वैकल्पिक)
+Wallets in the same folder (e.g. Binance, Trust Wallet) are shown together.	Кошельки из одной папки (напр. Binance, Trust Wallet) показываются вместе.	एक ही फ़ोल्डर के वॉलेट (जैसे Binance, Trust Wallet) साथ दिखते हैं।
+Folder name	Название папки	फ़ोल्डर का नाम
+Rename folder	Переименовать папку	फ़ोल्डर का नाम बदलें
+Note (optional)	Заметка (необязательно)	नोट (वैकल्पिक)
+Address	Адрес	पता
+Paste address	Вставить адрес	पता पेस्ट करें
+Paste a USDT address	Вставьте адрес USDT	USDT पता पेस्ट करें
+Not a supported address	Адрес не поддерживается	यह पता समर्थित नहीं है
+Not a supported address. Check that it was copied completely.	Адрес не поддерживается. Проверьте, что он скопирован полностью.	यह पता समर्थित नहीं है। जांचें कि पूरा पता कॉपी हुआ है।
+Network	Сеть	नेटवर्क
+All	Все	सभी
+All networks	Все сети	सभी नेटवर्क
+Which network?	Какая сеть?	कौन सा नेटवर्क?
+This address works on several networks. Pick one, or check them all.	Этот адрес работает в нескольких сетях. Выберите одну или проверьте все.	यह पता कई नेटवर्क पर चलता है। एक चुनें या सभी जांचें।
+Save	Сохранить	सेव करें
+Cancel	Отмена	रद्द करें
+Delete	Удалить	हटाएं
+Edit	Изменить	बदलें
+Copy	Копировать	कॉपी
+Copy address	Копировать адрес	पता कॉपी करें
+Address copied	Адрес скопирован	पता कॉपी हो गया
+Share	Поделиться	शेयर करें
+Show QR	Показать QR	QR दिखाएं
+QR	QR	QR
+History	История	इतिहास
+Pin to top	Закрепить наверху	ऊपर पिन करें
+Unpin	Открепить	पिन हटाएं
+More	Ещё	और
+Folder options	Настройки папки	फ़ोल्डर विकल्प
+Drag to reorder	Перетащите для сортировки	क्रम बदलने के लिए खींचें
+This only removes it from this app.	Он удаляется только из этого приложения.	यह सिर्फ़ इस ऐप से हटेगा।
+No saved wallets yet.	Сохранённых кошельков пока нет.	अभी कोई सेव किया वॉलेट नहीं है।
+No contacts yet. Save someone's address as a Contact to protect it from lookalikes.	Контактов пока нет. Сохраните чужой адрес как контакт, чтобы защититься от поддельных похожих адресов.	अभी कोई संपर्क नहीं। नकली मिलते-जुलते पतों से बचने के लिए किसी का पता संपर्क के रूप में सेव करें।
+Show balances	Показать балансы	बैलेंस दिखाएं
+Unlock	Разблокировать	अनलॉक करें
+Unlock wallets	Разблокировать кошельки	वॉलेट अनलॉक करें
+Use your fingerprint (or phone PIN)	Используйте отпечаток пальца (или PIN телефона)	अपना फ़िंगरप्रिंट (या फ़ोन PIN) इस्तेमाल करें
+Scan a wallet QR code	Отсканируйте QR-код кошелька	वॉलेट का QR कोड स्कैन करें
+Close	Закрыть	बंद करें
+Balance	Баланс	बैलेंस
+Other tokens	Другие токены	अन्य टोकन
+Not included in your total.	Не входит в итоговую сумму.	आपके कुल में शामिल नहीं।
+Empty on every network	Пусто во всех сетях	हर नेटवर्क पर खाली
+Updated just now	Обновлено только что	अभी अपडेट हुआ
+just now	только что	अभी
+Updating	Обновление	अपडेट हो रहा है
+Loading…	Загрузка…	लोड हो रहा है…
+Checking…	Проверка…	जांच हो रही है…
+price unavailable	цена недоступна	कीमत उपलब्ध नहीं
+Last activity	Последняя активность	आख़िरी गतिविधि
+Transactions sent	Отправлено транзакций	भेजे गए लेन-देन
+Created	Создан	बनाया गया
+Reserved / staked	Зарезервировано / в стейкинге	आरक्षित / स्टेक किया
+Not activated (no on-chain activity yet)	Не активирован (ещё нет активности в сети)	सक्रिय नहीं (अभी कोई ऑन-चेन गतिविधि नहीं)
+Transaction history	История транзакций	लेन-देन का इतिहास
+Transactions	Транзакции	लेन-देन
+Total received	Всего получено	कुल प्राप्त
+Total sent	Всего отправлено	कुल भेजा
+Received	Получено	प्राप्त
+Sent	Отправлено	भेजा
+Load more	Загрузить ещё	और लोड करें
+Loading transfers…	Загрузка переводов…	ट्रांसफ़र लोड हो रहे हैं…
+No transfers found.	Переводов не найдено.	कोई ट्रांसफ़र नहीं मिला।
+No stablecoin transfers found	Переводов стейблкоинов не найдено	कोई स्टेबलकॉइन ट्रांसफ़र नहीं मिला
+No transactions	Нет транзакций	कोई लेन-देन नहीं
+Couldn't load history. Pull down to retry.	Не удалось загрузить историю. Потяните вниз, чтобы повторить.	इतिहास लोड नहीं हुआ। फिर से कोशिश करने के लिए नीचे खींचें।
+Couldn't load the transaction history.	Не удалось загрузить историю транзакций.	लेन-देन का इतिहास लोड नहीं हुआ।
+Couldn't load right now.	Сейчас не удалось загрузить.	अभी लोड नहीं हो सका।
+Couldn't check right now	Сейчас не удалось проверить	अभी जांच नहीं हो सकी
+Export	Экспорт	एक्सपोर्ट
+Export history	Экспорт истории	इतिहास एक्सपोर्ट करें
+Explorer	Обозреватель	एक्सप्लोरर
+Open in blockchain explorer →	Открыть в обозревателе блокчейна →	ब्लॉकचेन एक्सप्लोरर में खोलें →
+Open this address →	Открыть этот адрес →	यह पता खोलें →
+Save as contact	Сохранить как контакт	संपर्क के रूप में सेव करें
+Transaction ID	ID транзакции	लेन-देन ID
+Amount	Сумма	राशि
+From	От	से
+To	Кому	को
+Status	Статус	स्थिति
+Pending	В ожидании	लंबित
+Details	Подробности	विवरण
+Detected by payment alerts	Обнаружено уведомлениями о платежах	पेमेंट अलर्ट से पता चला
+Your own wallet	Ваш кошелёк	आपका अपना वॉलेट
+Deposit	Пополнение	जमा
+Withdraw	Вывод	निकासी
+Receive	Получить	प्राप्त करें
+Payment	Платёж	भुगतान
+Payments	Платежи	भुगतान
+Free BSC data only covers the last hour or so. Payments detected by alerts are listed below.	Бесплатные данные BSC охватывают только последний час. Платежи, найденные уведомлениями, показаны ниже.	मुफ़्त BSC डेटा सिर्फ़ पिछले लगभग एक घंटे का है। अलर्ट से मिले भुगतान नीचे हैं।
+This network's history service isn't available right now.	Сервис истории этой сети сейчас недоступен.	इस नेटवर्क की इतिहास सेवा अभी उपलब्ध नहीं है।
+No internet connection.	Нет подключения к интернету.	इंटरनेट कनेक्शन नहीं है।
+The service took too long. Pull down to retry.	Сервис отвечает слишком долго. Потяните вниз, чтобы повторить.	सेवा ने बहुत देर लगाई। फिर से कोशिश करने के लिए नीचे खींचें।
+Too many requests. Try again in a minute.	Слишком много запросов. Повторите через минуту.	बहुत ज़्यादा अनुरोध। एक मिनट बाद फिर कोशिश करें।
+Before you send	Перед отправкой	भेजने से पहले
+No red flags found	Тревожных признаков не найдено	कोई ख़तरे का संकेत नहीं मिला
+A clean result isn't a guarantee. Only send to people you trust.	Чистый результат — не гарантия. Отправляйте только тем, кому доверяете.	साफ़ नतीजा गारंटी नहीं है। सिर्फ़ भरोसेमंद लोगों को ही भेजें।
+Flagged as dangerous. Don't send.	Помечен как опасный. Не отправляйте.	ख़तरनाक के रूप में चिह्नित। न भेजें।
+Reported as a scam or compromised. Don't send money to this address.	Отмечен как мошеннический или взломанный. Не отправляйте деньги на этот адрес.	धोखाधड़ी या हैक के रूप में रिपोर्ट किया गया। इस पते पर पैसे न भेजें।
+Reported as dangerous	Отмечен как опасный	ख़तरनाक के रूप में रिपोर्ट किया गया
+Different address made to look like yours. Don't send money to it.	Другой адрес, похожий на ваш. Не отправляйте на него деньги.	आपके पते जैसा दिखने वाला अलग पता। इस पर पैसे न भेजें।
+New or unused address	Новый или неиспользованный адрес	नया या अप्रयुक्त पता
+New or unused address. Double-check before sending.	Новый или неиспользованный адрес. Проверьте перед отправкой.	नया या अप्रयुक्त पता। भेजने से पहले दोबारा जांचें।
+This looks like a new or unused wallet. Double-check every character of the address before sending.	Похоже на новый или неиспользованный кошелёк. Проверьте каждый символ адреса перед отправкой.	यह नया या अप्रयुक्त वॉलेट लगता है। भेजने से पहले पते का हर अक्षर जांचें।
+Active wallet	Активный кошелёк	सक्रिय वॉलेट
+Activity unknown	Активность неизвестна	गतिविधि अज्ञात
+Not on scam lists	Нет в списках мошенников	धोखाधड़ी सूची में नहीं
+Marked as scam	Отмечен как мошенник	धोखाधड़ी के रूप में चिह्नित
+Not marked as scam	Не отмечен как мошенник	धोखाधड़ी के रूप में चिह्नित नहीं
+No reports found in the GoPlus security database.	В базе безопасности GoPlus жалоб не найдено.	GoPlus सुरक्षा डेटाबेस में कोई रिपोर्ट नहीं मिली।
+No scam mark on Tonapi.	В Tonapi нет отметки о мошенничестве.	Tonapi पर धोखाधड़ी का निशान नहीं।
+Tonapi lists this address as a scam. Do not send money to it.	Tonapi отмечает этот адрес как мошеннический. Не отправляйте на него деньги.	Tonapi इस पते को धोखाधड़ी बताता है। इस पर पैसे न भेजें।
+Scam database unavailable	База мошенников недоступна	धोखाधड़ी डेटाबेस उपलब्ध नहीं
+Not frozen by Tether	Не заморожен Tether	Tether ने फ़्रीज़ नहीं किया
+Tether hasn't blacklisted this address.	Tether не заблокировал этот адрес.	Tether ने इस पते को ब्लैकलिस्ट नहीं किया है।
+Tether has blacklisted this address. USDT sent here can't be moved again.	Tether заблокировал этот адрес. Отправленные сюда USDT нельзя будет вывести.	Tether ने इस पते को ब्लैकलिस्ट किया है। यहां भेजे गए USDT फिर नहीं निकाले जा सकते।
+This is a smart contract	Это смарт-контракт	यह एक स्मार्ट कॉन्ट्रैक्ट है
+Not a personal wallet. Only send to it if you know exactly what this contract does.	Это не личный кошелёк. Отправляйте только если точно знаете, что делает этот контракт.	यह निजी वॉलेट नहीं है। तभी भेजें जब आप ठीक से जानते हों कि यह कॉन्ट्रैक्ट क्या करता है।
+Appearance	Оформление	दिखावट
+Follow phone (black or white)	Как в телефоне (чёрная или белая)	फ़ोन के अनुसार (काला या सफ़ेद)
+Black (OLED)	Чёрная (OLED)	काला (OLED)
+White	Белая	सफ़ेद
+Language	Язык	भाषा
+Currency	Валюта	मुद्रा
+US dollar ($)	Доллар США ($)	अमेरिकी डॉलर ($)
+Indian rupee (₹)	Индийская рупия (₹)	भारतीय रुपया (₹)
+Euro (€)	Евро (€)	यूरो (€)
+British pound (£)	Британский фунт (£)	ब्रिटिश पाउंड (£)
+UAE dirham (AED)	Дирхам ОАЭ (AED)	यूएई दिरहम (AED)
+Azerbaijani manat (₼)	Азербайджанский манат (₼)	अज़रबैजानी मनात (₼)
+Russian ruble (₽)	Российский рубль (₽)	रूसी रूबल (₽)
+Price data	Источник цен	कीमत का स्रोत
+Auto (CoinMarketCap, then Binance, Bybit, CoinGecko)	Авто (CoinMarketCap, затем Binance, Bybit, CoinGecko)	ऑटो (CoinMarketCap, फिर Binance, Bybit, CoinGecko)
+Notifications	Уведомления	सूचनाएं
+Off	Выкл.	बंद
+Payment alerts	Уведомления о платежах	भुगतान अलर्ट
+Notify me when a saved wallet receives or sends money.	Сообщать, когда сохранённый кошелёк получает или отправляет деньги.	जब कोई सेव किया वॉलेट पैसे पाए या भेजे, तो सूचना दें।
+Instant	Мгновенно	तुरंत
+Checks every 30 seconds while charging and every 5 minutes on battery. Shows a small permanent notification.	Проверка каждые 30 секунд при зарядке и каждые 5 минут от батареи. Показывает небольшое постоянное уведомление.	चार्जिंग पर हर 30 सेकंड, बैटरी पर हर 5 मिनट में जांच। एक छोटी स्थायी सूचना दिखाता है।
+Battery saver	Экономия заряда	बैटरी बचत
+Checks about every 15 minutes.	Проверка примерно каждые 15 минут.	लगभग हर 15 मिनट में जांच।
+Only alert for USDT payments of at least	Уведомлять только о платежах USDT от	सिर्फ़ इतने या ज़्यादा के USDT भुगतान पर अलर्ट
+Any amount	Любая сумма	कोई भी राशि
+Big payment alert (louder, longer vibration) from	Крупный платёж (громче, дольше вибрация) от	बड़े भुगतान का अलर्ट (तेज़, लंबा कंपन) इतने से
+Your phone may pause Batwallet in the background and delay alerts.	Телефон может приостанавливать Batwallet в фоне и задерживать уведомления.	आपका फ़ोन Batwallet को बैकग्राउंड में रोक सकता है और अलर्ट देर से आ सकते हैं।
+Allow background running	Разрешить работу в фоне	बैकग्राउंड में चलने दें
+Daily summary	Ежедневная сводка	दैनिक सारांश
+Your total and today's change, every morning around 9 AM.	Итог и изменение за день каждое утро около 9:00.	आपका कुल और आज का बदलाव, हर सुबह लगभग 9 बजे।
+Security	Безопасность	सुरक्षा
+Fingerprint lock	Блокировка отпечатком	फ़िंगरप्रिंट लॉक
+Ask for fingerprint (or phone PIN) to open the app	Запрашивать отпечаток (или PIN телефона) при открытии	ऐप खोलने के लिए फ़िंगरप्रिंट (या फ़ोन PIN) मांगें
+Set up a fingerprint or screen lock in your phone settings to use this	Настройте отпечаток или блокировку экрана в настройках телефона	इसके लिए फ़ोन की सेटिंग्स में फ़िंगरप्रिंट या स्क्रीन लॉक सेट करें
+Whole app	Всё приложение	पूरा ऐप
+Only the Wallets tab	Только вкладку «Кошельки»	सिर्फ़ वॉलेट टैब
+Home stays open; Wallets asks for your fingerprint	Главная открыта, «Кошельки» требуют отпечаток	होम खुला रहेगा; वॉलेट के लिए फ़िंगरप्रिंट लगेगा
+Lock again after leaving the app	Снова блокировать после выхода	ऐप छोड़ने के बाद फिर लॉक करें
+Every time	Каждый раз	हर बार
+Lock when the screen turns off	Блокировать при выключении экрана	स्क्रीन बंद होने पर लॉक करें
+Backup	Резервная копия	बैकअप
+Wallets, folders and API key	Кошельки, папки и API-ключ	वॉलेट, फ़ोल्डर और API कुंजी
+Save your wallets, folders, notes and Etherscan API key to a file, or restore them on a new phone. Keep the file private.	Сохраните кошельки, папки, заметки и API-ключ Etherscan в файл или восстановите их на новом телефоне. Не передавайте файл другим.	अपने वॉलेट, फ़ोल्डर, नोट और Etherscan API कुंजी एक फ़ाइल में सेव करें या नए फ़ोन पर वापस लाएं। फ़ाइल निजी रखें।
+Import	Импорт	इम्पोर्ट
+Backup saved	Копия сохранена	बैकअप सेव हो गया
+Restored	Восстановлено	वापस लाए गए
+already saved	уже сохранены	पहले से सेव
+Etherscan API key	API-ключ Etherscan	Etherscan API कुंजी
+Not set	Не задан	सेट नहीं
+Saved	Сохранён	सेव है
+Optional. Lets the app show full history for BSC, Avalanche, Sonic and other EVM networks.	Необязательно. Позволяет показывать полную историю для BSC, Avalanche, Sonic и других EVM-сетей.	वैकल्पिक। इससे ऐप BSC, Avalanche, Sonic और दूसरे EVM नेटवर्क का पूरा इतिहास दिखा पाता है।
+Paste your API key	Вставьте ваш API-ключ	अपनी API कुंजी पेस्ट करें
+Save key	Сохранить ключ	कुंजी सेव करें
+Remove	Удалить	हटाएं
+How to get a key	Как получить ключ	कुंजी कैसे पाएं
+Get a free Etherscan key	Бесплатный ключ Etherscan	मुफ़्त Etherscan कुंजी पाएं
+Open etherscan.io and tap Sign In → Click to sign up. Make a free account and confirm your email.	Откройте etherscan.io и нажмите Sign In → Click to sign up. Создайте бесплатный аккаунт и подтвердите почту.	etherscan.io खोलें और Sign In → Click to sign up दबाएं। मुफ़्त अकाउंट बनाएं और अपना ईमेल पुष्टि करें।
+Sign in, open the menu under your username and choose API Keys (API Dashboard).	Войдите, откройте меню под своим именем и выберите API Keys (API Dashboard).	साइन इन करें, अपने यूज़रनेम वाले मेनू में API Keys (API Dashboard) चुनें।
+Tap + Add, type a name like Batwallet and tap Create New API Key.	Нажмите + Add, введите название, например Batwallet, и нажмите Create New API Key.	+ Add दबाएं, Batwallet जैसा नाम लिखें और Create New API Key दबाएं।
+Copy the key (a long code of letters and numbers).	Скопируйте ключ (длинный код из букв и цифр).	कुंजी कॉपी करें (अक्षरों और अंकों का लंबा कोड)।
+Come back here, paste it into the box and tap Save key.	Вернитесь сюда, вставьте его в поле и нажмите «Сохранить ключ».	यहां वापस आएं, बॉक्स में पेस्ट करें और "कुंजी सेव करें" दबाएं।
+The key is free, only lets the app read public blockchain data, and is saved only on this phone (and in your backup file).	Ключ бесплатный, позволяет только читать публичные данные блокчейна и хранится только на этом телефоне (и в вашей резервной копии).	कुंजी मुफ़्त है, इससे ऐप सिर्फ़ सार्वजनिक ब्लॉकचेन डेटा पढ़ सकता है, और यह सिर्फ़ इस फ़ोन (और आपकी बैकअप फ़ाइल) में सेव रहती है।
+Open etherscan.io	Открыть etherscan.io	etherscan.io खोलें
+Report a problem	Сообщить о проблеме	समस्या बताएं
+The app crashed last time	Приложение упало в прошлый раз	पिछली बार ऐप बंद हो गया था
+Send a report on Telegram	Отправить отчёт в Telegram	Telegram पर रिपोर्ट भेजें
+The app closed unexpectedly last time. Send the report to @MalluWayne on Telegram so it can be fixed.	В прошлый раз приложение неожиданно закрылось. Отправьте отчёт @MalluWayne в Telegram, чтобы это исправили.	पिछली बार ऐप अचानक बंद हो गया। रिपोर्ट Telegram पर @MalluWayne को भेजें ताकि इसे ठीक किया जा सके।
+Send your phone and app details to @MalluWayne on Telegram. Then write what went wrong.	Отправьте данные телефона и приложения @MalluWayne в Telegram и опишите, что пошло не так.	अपने फ़ोन और ऐप की जानकारी Telegram पर @MalluWayne को भेजें। फिर लिखें कि क्या गड़बड़ हुई।
+Send on Telegram	Отправить в Telegram	Telegram पर भेजें
+Dismiss	Скрыть	हटाएं
+Report copied. In the chat, long-press the message box, tap Paste and send.	Отчёт скопирован. В чате зажмите поле сообщения, нажмите «Вставить» и отправьте.	रिपोर्ट कॉपी हो गई। चैट में मैसेज बॉक्स को देर तक दबाएं, Paste दबाएं और भेजें।
+Batwallet closed unexpectedly	Batwallet неожиданно закрылся	Batwallet अचानक बंद हो गया
+Send the crash report to @MalluWayne on Telegram so it can be fixed? It has only app and phone details, no wallets.	Отправить отчёт об ошибке @MalluWayne в Telegram, чтобы её исправили? В нём только данные приложения и телефона, без кошельков.	क्रैश रिपोर्ट Telegram पर @MalluWayne को भेजें ताकि इसे ठीक किया जा सके? इसमें सिर्फ़ ऐप और फ़ोन की जानकारी है, कोई वॉलेट नहीं।
+Not now	Не сейчас	अभी नहीं
+Made with ♥︎ by @MalluWayne & Claude	Сделано с ♥︎ @MalluWayne и Claude	@MalluWayne और Claude ने ♥︎ से बनाया
+Version	Версия	संस्करण
+Read-only. It never asks for keys and can't move funds.	Только просмотр. Никогда не просит ключи и не может переводить средства.	सिर्फ़ देखने के लिए। यह कभी कुंजियां नहीं मांगता और पैसे नहीं भेज सकता।
+Tip	Подсказка	सुझाव
+Next	Далее	आगे
+Got it	Понятно	समझ गया
+Skip tips	Пропустить	सुझाव छोड़ें
+Tap Paste & check to look up any wallet address, or Scan to read a QR code.	Нажмите «Вставить и проверить», чтобы проверить любой адрес, или «Сканировать», чтобы прочитать QR-код.	किसी भी वॉलेट पते को देखने के लिए "पेस्ट करें और जांचें" दबाएं, या QR कोड पढ़ने के लिए स्कैन दबाएं।
+Tap your total to hide or show balances.	Нажмите на итоговую сумму, чтобы скрыть или показать балансы.	बैलेंस छिपाने या दिखाने के लिए अपने कुल पर टैप करें।
+Pull down to refresh all balances.	Потяните вниз, чтобы обновить все балансы.	सभी बैलेंस रीफ़्रेश करने के लिए नीचे खींचें।
+Tap a recent transaction to see who paid, who received, and follow the money.	Нажмите на транзакцию, чтобы увидеть, кто платил, кто получил, и проследить деньги дальше.	किसने भेजा, किसने पाया, यह देखने और पैसे का रास्ता देखने के लिए किसी हाल के लेन-देन पर टैप करें।
+Tap Add to save a wallet or a contact. Put wallets in folders like Binance or Trust Wallet.	Нажмите «Добавить», чтобы сохранить кошелёк или контакт. Раскладывайте кошельки по папкам, например Binance или Trust Wallet.	वॉलेट या संपर्क सेव करने के लिए "जोड़ें" दबाएं। वॉलेट को Binance या Trust Wallet जैसे फ़ोल्डर में रखें।
+Hold the ≡ handle and drag to reorder wallets and folders.	Удерживайте значок ≡ и перетаскивайте, чтобы менять порядок кошельков и папок.	वॉलेट और फ़ोल्डर का क्रम बदलने के लिए ≡ को पकड़कर खींचें।
+Tap ⋮ on a folder to rename it, or on a wallet for QR, share, history and edit.	Нажмите ⋮ у папки, чтобы переименовать её, или у кошелька — для QR, отправки, истории и изменения.	फ़ोल्डर का नाम बदलने के लिए उस पर ⋮ दबाएं, या वॉलेट पर QR, शेयर, इतिहास और बदलाव के लिए।
+Long-press a wallet to copy its address. Tap a folder name to fold it.	Зажмите кошелёк, чтобы скопировать адрес. Нажмите на название папки, чтобы свернуть её.	पता कॉपी करने के लिए वॉलेट को देर तक दबाएं। फ़ोल्डर को समेटने के लिए उसके नाम पर टैप करें।
+Choose language, currency and black or white theme here.	Здесь выбираются язык, валюта и чёрная или белая тема.	यहां भाषा, मुद्रा और काली या सफ़ेद थीम चुनें।
+Turn on payment alerts and the daily summary.	Включите уведомления о платежах и ежедневную сводку.	भुगतान अलर्ट और दैनिक सारांश चालू करें।
+Lock the whole app, or only your wallets, with your fingerprint.	Блокируйте отпечатком всё приложение или только кошельки.	फ़िंगरप्रिंट से पूरा ऐप या सिर्फ़ अपने वॉलेट लॉक करें।
+Export a backup before changing phones. It keeps your wallets, folders and API key.	Сделайте резервную копию перед сменой телефона. В ней сохраняются кошельки, папки и API-ключ.	फ़ोन बदलने से पहले बैकअप एक्सपोर्ट करें। इसमें आपके वॉलेट, फ़ोल्डर और API कुंजी रहते हैं।
+Total value	Общая стоимость	कुल मूल्य
+Wallet details	Данные кошелька	वॉलेट विवरण
+Share wallet	Поделиться кошельком	वॉलेट शेयर करें
+Wallet address	Адрес кошелька	वॉलेट पता
+Mark as read	Прочитано	पढ़ा हुआ मानें
+Your daily summary	Ваша ежедневная сводка	आपका दैनिक सारांश
+Big payments	Крупные платежи	बड़े भुगतान
+Money received or sent from your saved wallets	Деньги, полученные или отправленные с сохранённых кошельков	आपके सेव किए वॉलेट से आए या गए पैसे
+Lightning balances are private, so they can't be looked up from an invoice or address.	Балансы Lightning приватны, их нельзя узнать по счёту или адресу.	Lightning बैलेंस निजी होते हैं, इसलिए इनवॉइस या पते से नहीं देखे जा सकते।
+BNB Beacon Chain (BEP2) was shut down in 2024. Its balances can't be checked anymore.	BNB Beacon Chain (BEP2) закрыт в 2024 году. Его балансы больше нельзя проверить.	BNB Beacon Chain (BEP2) 2024 में बंद हो गया। इसके बैलेंस अब नहीं देखे जा सकते।
+Unknown network	Неизвестная сеть	अज्ञात नेटवर्क
+Account doesn't exist yet	Аккаунт ещё не создан	अकाउंट अभी मौजूद नहीं है
+From	От	से
+To	Кому	को
+today	сегодня	आज
+Optional. Etherscan's free plan covers Ethereum and a few other networks. BSC, Polygon, Arbitrum and Base history work without a key.	Необязательно. Бесплатный план Etherscan охватывает Ethereum и несколько других сетей. История BSC, Polygon, Arbitrum и Base работает без ключа.	वैकल्पिक। Etherscan का मुफ़्त प्लान Ethereum और कुछ अन्य नेटवर्क कवर करता है। BSC, Polygon, Arbitrum और Base का इतिहास बिना कुंजी के चलता है।
+Checks every 30 seconds. Uses more battery and shows a small permanent notification.	Проверка каждые 30 секунд. Расходует больше заряда и показывает небольшое постоянное уведомление.	हर 30 सेकंड में जांच। ज़्यादा बैटरी लेता है और एक छोटी स्थायी सूचना दिखाता है।
+Checks about every 15 minutes, and every 30 seconds while charging.	Проверка примерно каждые 15 минут, а при зарядке — каждые 30 секунд.	लगभग हर 15 मिनट में जांच, और चार्जिंग पर हर 30 सेकंड में।
+Total balance	Общий баланс	कुल बैलेंस
+Add wallet	Добавить кошелёк	वॉलेट जोड़ें
+Refresh	Обновить	रीफ़्रेश
+Wallets are locked	Кошельки заблокированы	वॉलेट लॉक हैं
+General	Общие	सामान्य
+Alerts & security	Уведомления и безопасность	अलर्ट और सुरक्षा
+Data	Данные	डेटा
+Support	Поддержка	सहायता
+Hide balances under $1	Скрыть балансы меньше $1	$1 से कम बैलेंस छिपाएं
+Today	Сегодня	आज
+Yesterday	Вчера	कल
+Copy a wallet address first, then tap Paste & check.	Сначала скопируйте адрес кошелька, затем нажмите «Вставить и проверить».	पहले वॉलेट पता कॉपी करें, फिर "पेस्ट करें और जांचें" दबाएं।
+Edit order	Изменить порядок	क्रम बदलें
+Done	Готово	हो गया
+Drag ≡ to move wallets and folders.	Перетаскивайте ≡, чтобы двигать кошельки и папки.	वॉलेट और फ़ोल्डर खिसकाने के लिए ≡ को खींचें।
+Tap ⋯ → Edit order, then drag ≡ to put wallets and folders in your order.	Нажмите ⋯ → «Изменить порядок» и перетаскивайте ≡, чтобы расставить кошельки и папки.	⋯ → "क्रम बदलें" दबाएं, फिर ≡ खींचकर वॉलेट और फ़ोल्डर अपने क्रम में रखें।
+Long-press a wallet to copy, see its QR, share, history or edit. Long-press a folder to rename it.	Зажмите кошелёк, чтобы скопировать, показать QR, поделиться, открыть историю или изменить. Зажмите папку, чтобы переименовать.	कॉपी, QR, शेयर, इतिहास या बदलाव के लिए वॉलेट को देर तक दबाएं। नाम बदलने के लिए फ़ोल्डर को देर तक दबाएं।
+Tap a folder name to fold it. Pull down to refresh balances.	Нажмите на название папки, чтобы свернуть её. Потяните вниз, чтобы обновить балансы.	फ़ोल्डर समेटने के लिए उसके नाम पर टैप करें। बैलेंस रीफ़्रेश करने के लिए नीचे खींचें।
+Minimum	Минимум	न्यूनतम
+Big payment	Крупный платёж	बड़ा भुगतान
+15 min · 30 s charging	15 мин · 30 с при зарядке	15 मिनट · चार्जिंग पर 30 सेकंड
+9 AM	9:00	सुबह 9 बजे
+Set up a screen lock on your phone first	Сначала включите блокировку экрана	पहले फ़ोन में स्क्रीन लॉक सेट करें
+Lock again after	Снова блокировать через	फिर लॉक करें
+Lock on screen off	Блокировать при выключении экрана	स्क्रीन बंद होने पर लॉक
+Export or import	Экспорт или импорт	एक्सपोर्ट या इम्पोर्ट
+Search	Поиск	खोजें
+Drag ≡ to move	Перетащите ≡	खिसकाने के लिए ≡ खींचें
+Lookalike of	Похож на	इसकी नकल:
+don't copy	не копируйте	कॉपी न करें
+Low	Мало	कम
+may not cover the fee to send USDT	может не хватить на комиссию за отправку USDT	USDT भेजने की फ़ीस के लिए शायद काफ़ी नहीं
+balance	баланс	बैलेंस
+min ago	мин назад	मिनट पहले
+h ago	ч назад	घंटे पहले
+selected	выбрано	चुने गए
+Move	Переместить	ले जाएं
+Archive	Архивировать	आर्काइव करें
+Unarchive	Из архива	आर्काइव से निकालें
+Archived	В архиве	आर्काइव
+Show archived	Показать архив	आर्काइव दिखाएं
+Select	Выбрать	चुनें
+Move to folder	Переместить в папку	फ़ोल्डर में ले जाएं
+This only removes them from this app.	Они удаляются только из этого приложения.	ये सिर्फ़ इस ऐप से हटेंगे।
+Already saved as	Уже сохранён как	पहले से सेव है:
+Check transaction	Проверить транзакцию	लेन-देन जांचें
+Compare	Сравнить	तुलना करें
+Paste	Вставить	पेस्ट करें
+Searching…	Поиск…	खोज रहे हैं…
+Not found on the supported networks.	Не найдено в поддерживаемых сетях.	समर्थित नेटवर्क पर नहीं मिला।
+Compare addresses	Сравнить адреса	पते की तुलना करें
+First	Первый	पहला
+Second	Второй	दूसरा
+Same address	Одинаковый адрес	एक ही पता
+Different	Отличаются	अलग हैं
+characters	симв.	अक्षर
+Address found	Найден адрес	पता मिला
+Addresses found	Найдены адреса	पते मिले
+Read from a photo: check it matches before you use it.	Прочитано с фото: сверьте перед использованием.	फ़ोटो से पढ़ा गया: इस्तेमाल से पहले मिलान कर लें।
+Transfer	Перевод	ट्रांसफ़र
+Confirmed	Подтверждено	पुष्ट
+Failed	Не выполнено	विफल
+No wallet address found	Адрес кошелька не найден	कोई वॉलेट पता नहीं मिला
+No wallet address found in the photo	На фото не найден адрес кошелька	फ़ोटो में कोई वॉलेट पता नहीं मिला
+Couldn't read the photo	Не удалось прочитать фото	फ़ोटो पढ़ी नहीं जा सकी
+Reading text…	Чтение текста…	टेक्स्ट पढ़ रहे हैं…
+Photo of text	Фото текста	टेक्स्ट की फ़ोटो
+Import photo	Импорт фото	फ़ोटो चुनें
+Export backup	Экспорт копии	बैकअप एक्सपोर्ट करें
+Password (optional)	Пароль (необязательно)	पासवर्ड (वैकल्पिक)
+Repeat password	Повторите пароль	पासवर्ड दोबारा लिखें
+Without this password the backup can't be opened.	Без этого пароля копию не открыть.	इस पासवर्ड के बिना बैकअप नहीं खुलेगा।
+Backup password	Пароль копии	बैकअप पासवर्ड
+Password	Пароль	पासवर्ड
+Wrong password	Неверный пароль	गलत पासवर्ड
+Open	Открыть	खोलें
+No contacts yet.	Контактов пока нет.	अभी कोई संपर्क नहीं।
+Cancel	Отмена	रद्द करें
+Check as transaction ID	Проверить как ID транзакции	लेन-देन ID के रूप में जांचें
+Long-press Paste & check for recent checks, transaction lookup and address compare.	Зажмите «Вставить и проверить» — недавние проверки, поиск транзакции и сравнение адресов.	"पेस्ट करें और जांचें" को देर तक दबाएं: हाल की जांच, लेन-देन खोज और पते की तुलना।
+No QR code found in the photo	На фото нет QR-кода	फ़ोटो में कोई QR कोड नहीं मिला
+Reading…	Чтение…	पढ़ रहे हैं…
+character	символ	अक्षर
+Lock the app with your fingerprint.	Блокируйте приложение отпечатком пальца.	फ़िंगरप्रिंट से ऐप लॉक करें।
+On	Вкл.	चालू

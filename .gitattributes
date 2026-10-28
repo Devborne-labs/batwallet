@@ -1,0 +1,7 @@
+# Normal line endings for text; the shell script must keep Unix ones to run on Mac / Linux.
+* text=auto
+gradlew text eol=lf
+*.bat text eol=crlf
+*.jar binary
+*.ttf binary
+*.png binary
