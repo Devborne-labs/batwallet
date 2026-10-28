@@ -31,21 +31,22 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 
 /**
- * Exchange badges are brand-coloured monograms drawn by the app, not the exchanges' logos: those are trademarks
- * and aren't licensed for bundling in an open-source app.
+ * Exchange badges: the exchange's mark where a freely licensed one exists (Simple Icons, CC0: Binance, OKX, KuCoin;
+ * the CC0 coin set's exchange tokens: HTX, Bitfinex), otherwise a monogram in its brand colours. Marks are shown only
+ * to identify the exchange.
  */
-private class Brand(val bg: Color, val fg: Color, val letters: String)
+private class Brand(val bg: Color, val fg: Color, val letters: String, val mark: Int? = null, val image: Int? = null)
 
 private val BRANDS = mapOf(
-    "Binance" to Brand(Color(0xFFF0B90B), Color(0xFF1E2026), "B"),
+    "Binance" to Brand(Color(0xFF1E2026), Color(0xFFF0B90B), "B", mark = R.drawable.exch_binance),
     "Bybit" to Brand(Color(0xFF17181E), Color(0xFFF7A600), "BY"),
-    "OKX" to Brand(Color(0xFF000000), Color.White, "OKX"),
+    "OKX" to Brand(Color(0xFF000000), Color.White, "OKX", mark = R.drawable.exch_okx),
     "Coinbase" to Brand(Color(0xFF0052FF), Color.White, "C"),
     "Kraken" to Brand(Color(0xFF5741D9), Color.White, "K"),
-    "KuCoin" to Brand(Color(0xFF23AF91), Color.White, "KC"),
-    "Bitfinex" to Brand(Color(0xFF16B157), Color.White, "BF"),
+    "KuCoin" to Brand(Color(0xFF23AF91), Color.White, "KC", mark = R.drawable.exch_kucoin),
+    "Bitfinex" to Brand(Color(0xFF16B157), Color.White, "BF", image = R.drawable.exch_bitfinex),
     "Gemini" to Brand(Color(0xFF00DCFA), Color(0xFF0B0B0B), "G"),
-    "HTX" to Brand(Color(0xFF2B66F6), Color.White, "HTX"),
+    "HTX" to Brand(Color(0xFF2B66F6), Color.White, "HTX", image = R.drawable.exch_htx),
     "Gate.io" to Brand(Color(0xFF2354E6), Color.White, "G"),
     "Crypto.com" to Brand(Color(0xFF103F68), Color.White, "CR"),
     "MEXC" to Brand(Color(0xFF1972F5), Color.White, "M"),
@@ -56,9 +57,19 @@ private val BRANDS = mapOf(
 @Composable
 fun ExchangeBadge(name: String, size: Dp) {
     val b = BRANDS[name] ?: Brand(Color(0xFF616161), Color.White, name.take(1).uppercase())
+    b.image?.let {
+        androidx.compose.foundation.Image(androidx.compose.ui.res.painterResource(it), contentDescription = name,
+            modifier = Modifier.size(size).clip(CircleShape))
+        return
+    }
     Box(Modifier.size(size).clip(CircleShape).background(b.bg), contentAlignment = Alignment.Center) {
-        Text(b.letters, color = b.fg, fontWeight = FontWeight.Bold,
-            fontSize = (size.value * (if (b.letters.length >= 3) 0.30f else 0.42f)).sp, maxLines = 1)
+        if (b.mark != null) {
+            androidx.compose.material3.Icon(androidx.compose.ui.res.painterResource(b.mark), contentDescription = name,
+                tint = b.fg, modifier = Modifier.size(size * 0.6f))
+        } else {
+            Text(b.letters, color = b.fg, fontWeight = FontWeight.Bold,
+                fontSize = (size.value * (if (b.letters.length >= 3) 0.30f else 0.42f)).sp, maxLines = 1)
+        }
     }
 }
 

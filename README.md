@@ -141,4 +141,5 @@ Resources: `res/drawable-nodpi/coin_*.png` (CC0 cryptocurrency-icons), `res/draw
 - Code: [MIT](LICENSE) © 2026 MalluWayne
 - Font: [Inter](https://github.com/rsms/inter) by The Inter Project Authors, [SIL Open Font License 1.1](licenses/Inter-OFL.txt)
 - Coin icons: [cryptocurrency-icons](https://github.com/spothq/cryptocurrency-icons), CC0 1.0 (public domain)
+- Exchange marks: Binance, OKX and KuCoin from [Simple Icons](https://simpleicons.org) 16.36.0, CC0 1.0; HTX and Bitfinex use their exchange tokens' icons from cryptocurrency-icons. These are trademarks of their owners, shown only to identify the exchange; Batwallet is not affiliated with any exchange.
 - QR codes: [ZXing](https://github.com/zxing/zxing) / [zxing-android-embedded](https://github.com/journeyapps/zxing-android-embedded), Apache 2.0

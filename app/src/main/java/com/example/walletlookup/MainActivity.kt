@@ -668,7 +668,7 @@ private fun App(
     // Today's change of the saved-wallets total, recalculated whenever balances update.
     LaunchedEffect(cache, saved, syncing.isEmpty()) {
         // Record the total for the chart only after a full refresh, so half-updated totals don't show as spikes.
-        val mine = saved.filter { !it.contact && !it.archived }
+        val mine = saved.filter { !it.contact && !it.archived && !it.onExchange }
         if (syncing.isEmpty() && mine.isNotEmpty() && mine.all { cache.containsKey(it.address) }) {
             val total = mine.mapNotNull { cache[it.address]?.totals?.usd }.fold(BigDecimal.ZERO, BigDecimal::add)
             if (total.signum() > 0) {
@@ -677,7 +677,7 @@ private fun App(
             }
         }
         todayChange = try {
-            dayChange(saved.filter { !it.contact && !it.archived }.flatMap { cache[it.address]?.results.orEmpty() })
+            dayChange(saved.filter { !it.contact && !it.archived && !it.onExchange }.flatMap { cache[it.address]?.results.orEmpty() })
         } catch (e: CancellationException) {
             throw e
         } catch (_: Exception) {
@@ -1148,7 +1148,7 @@ private fun HomeTab(
                     TextButton(onClick = onBack, contentPadding = PaddingValues(0.dp)) { Text(backLabel) }
                 }
             } else {
-            item { TotalHeader(saved.filter { !it.contact && !it.archived }, cache, syncing, dayChange, onToggleHidden) }
+            item { TotalHeader(saved.filter { !it.contact && !it.archived && !it.onExchange }, cache, syncing, dayChange, onToggleHidden) }
             item {
                 Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                     // Tap: finds the address in whatever was copied (even a whole message), else shows recent checks.
@@ -1256,7 +1256,7 @@ private fun HomeTab(
                 BalanceCard(type, results, resultsTime, loading,
                     exchange = exchangeId != null || isExchangeWallet(address, savedWallet?.group.orEmpty(), savedWallet?.name.orEmpty()),
                     // An exchange's own wallet holds everyone's coins: its total is hidden until you ask for it.
-                    hiddenAtFirst = exchangeId?.ownWallet == true)
+                    hiddenAtFirst = exchangeId?.ownWallet == true || savedWallet?.onExchange == true)
             }
             if (!tokens.isNullOrEmpty()) item { OtherTokensCard(tokens) }
             if (type != null) item { SafetyCard(safety, safetyLoading, twin, savedWallet, platform) }
@@ -1488,7 +1488,7 @@ private fun WalletsTab(
     val groups = mine.map { it.group }.filter { it.isNotBlank() }.distinct().sorted()
     val archivedCount = saved.count { it.archived }
     fun usd(list: List<SavedAddress>) =
-        list.mapNotNull { cache[it.address]?.totals?.usd }.fold(BigDecimal.ZERO, BigDecimal::add)
+        list.filter { !it.onExchange }.mapNotNull { cache[it.address]?.totals?.usd }.fold(BigDecimal.ZERO, BigDecimal::add)
     /** Pinned first (in their own order), then the rest by the chosen sort. */
     fun ordered(list: List<SavedAddress>): List<SavedAddress> {
         val sorted = when (sort) {
@@ -1652,7 +1652,7 @@ private fun WalletsTab(
                                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                                         modifier = Modifier.weight(1f),
                                     )
-                                    Text(hideable(money(usd(wallets.filter { !it.archived }))), style = MaterialTheme.typography.labelLarge,
+                                    Text(if (wallets.isNotEmpty() && wallets.all { it.onExchange }) "Exchange" else hideable(money(usd(wallets.filter { !it.archived }))), style = MaterialTheme.typography.labelLarge,
                                         color = MaterialTheme.colorScheme.onSurfaceVariant)
                                     if (group.isNotBlank()) {
                                         Box {
@@ -1835,6 +1835,9 @@ private fun WalletRow(
         }
         // Value on top, the USDT it holds underneath (like a token row in Trust Wallet). Contacts show theirs too.
         when {
+            // An exchange's coins aren't yours: no balance here (the wallet page can still show it).
+            item.onExchange -> Text("Exchange", style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant)
             cached != null -> Column(horizontalAlignment = Alignment.End) {
                 Text(hideable(money(cached.totals.usd)), style = MaterialTheme.typography.bodyLarge, fontWeight = FontWeight.SemiBold)
                 Text(hideable(fmt2(cached.totals.usdt)) + " USDT", style = MaterialTheme.typography.bodySmall,
@@ -2313,18 +2316,26 @@ private fun SettingsTab(
         SettingsSection("Support") {
         // Updates come from the GitHub Releases page; the APK is downloaded in the browser and installed from there.
         SettingGroup("Updates", tr("Version") + " " + BatApp.appVersion(context), open == "updates", { toggle("updates") }) {
-            var checking by remember { mutableStateOf(false) }
+            // Opening the row is the check: no second tap needed.
+            var checking by remember { mutableStateOf(true) }
             var result by remember { mutableStateOf<Release?>(null) }
             var checked by remember { mutableStateOf(false) }
-            OutlinedButton(enabled = !checking, onClick = {
-                checking = true
-                scope.launch { result = latestRelease(); checked = true; checking = false }
-            }) { Text(if (checking) "Checking…" else "Check for updates") }
+            LaunchedEffect(checking) {
+                if (checking) { result = latestRelease(); checked = true; checking = false }
+            }
             val latest = result
             when {
+                checking -> Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(top = 8.dp)) {
+                    CircularProgressIndicator(Modifier.size(16.dp), strokeWidth = 2.dp)
+                    Spacer(Modifier.width(10.dp))
+                    Text("Checking…", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                }
                 !checked -> {}
-                latest == null -> Text("Couldn't reach GitHub. Try again later.", style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.error)
+                latest == null -> Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text("Couldn't reach GitHub. Try again later.", style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.error, modifier = Modifier.weight(1f))
+                    TextButton(onClick = { checking = true }) { Text("Retry") }
+                }
                 isNewerVersion(latest.version, BatApp.appVersion(context)) -> {
                     Text(tr("Version") + " ${latest.version} " + tr("is available"), fontWeight = FontWeight.SemiBold,
                         modifier = Modifier.padding(top = 8.dp))

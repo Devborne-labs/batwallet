@@ -76,6 +76,9 @@ fun isExchangeWallet(address: String, folder: String = "", name: String = ""): B
     val text = "$folder $name".lowercase()
     return knownPlatform(address) != null || EXCHANGES.any { it in text }
 }
+
+/** A wallet on an exchange holds the exchange's coins, not yours: it stays out of totals and its balance is hidden. */
+val SavedAddress.onExchange: Boolean get() = isExchangeWallet(address, group, name)
 /**
  * Why this address's balance may not be anyone's real balance: an exchange deposit address (the exchange moves the
  * coins on to its own wallets and keeps the person's balance in its own records), or an exchange's own wallet

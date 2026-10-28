@@ -418,7 +418,7 @@ class DailySummaryWorker(context: Context, params: WorkerParameters) : Coroutine
         if (!store.dailySummary || !Alerts.canNotify(applicationContext)) return Result.success()
         fiat = store.currency
         fiatRate = store.currencyRate
-        val mine = store.loadAddresses().filter { !it.contact && !it.archived }
+        val mine = store.loadAddresses().filter { !it.contact && !it.archived && !it.onExchange }
         val results = mine.flatMap { store.loadCache(it.address)?.results.orEmpty() }
         if (results.isEmpty()) return Result.success()
         val total = mine.mapNotNull { store.loadCache(it.address)?.totals?.usd }.fold(BigDecimal.ZERO, BigDecimal::add)
