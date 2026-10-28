@@ -713,6 +713,32 @@ private fun App(
         }
         onDispose { store.stopListening(listener) }
     }
+    // A payment came in (alerts recorded it): refresh every wallet's balance and Home's recent transactions,
+    // not just that one wallet's balance. At most every 20 seconds, so a burst of payments is one refresh.
+    DisposableEffect(Unit) {
+        var last = 0L
+        val listener = store.onActivityChanged { addr ->
+            // Straight onto Home from what the alert saved (the full refresh below can take a while).
+            store.loadAddresses().firstOrNull { it.address == addr && !it.contact && !it.archived && knownPlatform(it.address) == null }?.let { w ->
+                val fresh = store.loadActivity(addr).filter { it.amount.signum() > 0 || !w.onExchange }.take(5).map { s ->
+                    val incoming = s.amount.signum() > 0
+                    Triple(addr, s.network, Transfer(incoming, s.amount.abs(), if (incoming) s.from else s.to, s.time, null,
+                        s.hash, s.from, s.to, s.symbol))
+                }
+                recentTx = (fresh + recentTx)
+                    .distinctBy { (a, _, t) -> t.hash?.lowercase() ?: "$a|${t.time}|${t.amount.toPlainString()}" }
+                    .sortedByDescending { it.third.time }.take(5)
+                store.saveRecentTx(recentTx)
+            }
+            val now = System.currentTimeMillis()
+            if (now - last > 20_000) {
+                last = now
+                recentForce++
+                syncAll()
+            }
+        }
+        onDispose { store.stopListening(listener) }
+    }
 
     // Home: show the last saved result for this address at once, then fetch a fresh one.
     LaunchedEffect(address, refresh) {

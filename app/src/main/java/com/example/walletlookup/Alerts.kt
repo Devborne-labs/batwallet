@@ -400,14 +400,16 @@ object Alerts {
             val received = if (usdt.signum() != 0) usdt.signum() > 0 else worth.any { it.second.signum() > 0 }
             // Only the wallet's saved name is shown, never its address.
             val title = tr(if (received) "Received" else "Sent") + " · " + walletLabel(w)
-            // In your chosen currency first, like the app; coins also say the coin amount.
-            val text = worth.joinToString("\n") { (key, diff) ->
+            // Short: one line per payment, its value in your currency and the network ("+700.00 USDT · TON").
+            // A tiny coin change next to a real payment (a fee, or dust) is left out.
+            val shown = worth.filter { (key, diff) ->
+                val sym = key.substringBefore("|")
+                worth.size == 1 || sym.uppercase().startsWith("USD") ||
+                    (transferUsd(diff.abs(), sym) ?: BigDecimal.ONE) >= BigDecimal("0.01")
+            }
+            val text = shown.joinToString("\n") { (key, diff) ->
                 val (sym, net) = key.split("|", limit = 2)
-                val sign = if (diff.signum() > 0) "+" else "−"
-                val coin = !sym.uppercase().startsWith("USD")
-                val bal = fresh[key] ?: BigDecimal.ZERO
-                sign + transferValue(diff.abs(), sym) + (if (coin) " (${fmt(diff.abs())} $sym)" else "") + " · $net · " +
-                    tr("balance") + " " + transferValue(bal, sym)
+                (if (diff.signum() > 0) "+" else "−") + transferValue(diff.abs(), sym) + " · $net"
             }
             // Payments at or above the "big payment" amount use a louder channel and say so.
             val bigMin = store.bigPayment

@@ -91,6 +91,11 @@ suspend fun findTransfers(raw: String, network: String, symbol: String, change: 
         val candidates = if (c != null && detect(a) == AddrType.EVM) runCatching { logWindow(c, a, time) }.getOrNull()
         // Plain TRX (Tron's own coin): the Tron history only lists USDT, so ask for coin transfers directly.
         else if (network == "Tron" && symbol.equals("TRX", true)) runCatching { tronCoinWindow(a, time) }.getOrNull()
+        // BNB / ETH / POL: from the free coin-transfer lists (Binplorer, Ethplorer, Routescan, Blockscout).
+        else if (detect(a) == AddrType.EVM && !symbol.uppercase().startsWith("USD")) EVM_HIST.firstOrNull { it.name == network }?.let { h ->
+            runCatching { evmNativeTransfers(h.name, h.chainId, h.blockscout, h.routescan, h.txBase, a) }.getOrNull()
+                ?.filter { it.symbol.equals(symbol, true) && it.time in time - 3 * 3_600_000L..time + 15 * 60_000L }
+        }
         else runCatching { history(raw, setOf(network), limit = 100) }.getOrNull()?.flatMap { it.items }
             ?.filter { it.symbol.equals(symbol, true) && (it.time <= 0 || it.time in time - 3 * 3_600_000L..time + 15 * 60_000L) }
         pickTransfers(candidates.orEmpty(), change, time)

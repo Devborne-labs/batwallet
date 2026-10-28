@@ -301,6 +301,15 @@ class Store(context: Context) {
         return l
     }
 
+    /** Calls [listener] with the address whenever payment alerts record (or fill in) a payment for it. */
+    fun onActivityChanged(listener: (String) -> Unit): SharedPreferences.OnSharedPreferenceChangeListener {
+        val l = SharedPreferences.OnSharedPreferenceChangeListener { _, key ->
+            if (key != null && key.startsWith("activity:")) listener(key.removePrefix("activity:"))
+        }
+        prefs.registerOnSharedPreferenceChangeListener(l)
+        return l
+    }
+
     fun stopListening(l: SharedPreferences.OnSharedPreferenceChangeListener) =
         prefs.unregisterOnSharedPreferenceChangeListener(l)
 

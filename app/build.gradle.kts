@@ -11,8 +11,8 @@ android {
         applicationId = "com.malluwayne.batwallet"
         minSdk = 28
         targetSdk = 36
-        versionCode = 46
-        versionName = "17.9"
+        versionCode = 47
+        versionName = "18.0"
     }
 
     buildTypes {
@@ -45,5 +45,7 @@ dependencies {
     implementation("androidx.fragment:fragment-ktx:1.8.6")
     implementation("androidx.biometric:biometric:1.1.0")
     implementation("androidx.work:work-runtime-ktx:2.10.1")
+    // Installs the speed profiles that come with Compose, so a sideloaded APK starts and scrolls like a Play Store one.
+    implementation("androidx.profileinstaller:profileinstaller:1.4.1")
     implementation("com.journeyapps:zxing-android-embedded:4.3.0")
 }

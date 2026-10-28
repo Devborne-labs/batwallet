@@ -262,6 +262,26 @@ internal fun evmNativeTransfers(name: String, chainId: Long, blockscout: String?
                 txBase + o.getString("hash"), o.getString("hash"), from, to, sym)
         }
     }
+    /** Ethplorer (Ethereum) / Binplorer (BSC): free with their public "freekey". */
+    fun plorer(host: String): List<Transfer> {
+        val arr = JSONArray(http("https://$host/getAddressTransactions/$a?apiKey=freekey&limit=$MAX"))
+        return (0 until arr.length()).mapNotNull { i ->
+            val o = arr.getJSONObject(i)
+            if (!o.optBoolean("success", true)) return@mapNotNull null
+            val v = o.opt("rawValue")?.toString()?.takeIf { it.isNotBlank() && it != "null" }?.let { BigInteger(it) }
+                ?: BigDecimal(o.optString("value", "0")).movePointRight(18).toBigInteger()
+            if (v.signum() == 0) return@mapNotNull null
+            val from = o.getString("from")
+            val to = o.optString("to")
+            val incoming = to.equals(a, true)
+            Transfer(incoming, amount(v, 18), if (incoming) from else to, o.getLong("timestamp") * 1000,
+                txBase + o.getString("hash"), o.getString("hash"), from, to, sym)
+        }
+    }
+    if (etherscanKey.isBlank() && name == "BSC") return plorer("api.binplorer.com") // no other free BNB source
+    if (etherscanKey.isBlank() && name == "Ethereum") {
+        runCatching { return plorer("api.ethplorer.io") } // then Routescan / Blockscout below
+    }
     return when {
         etherscanKey.isNotBlank() -> etherscanStyle("https://api.etherscan.io/v2/api?chainid=$chainId&module=account&action=txlist" +
             "&address=$a&page=1&offset=$MAX&sort=desc&apikey=${URLEncoder.encode(etherscanKey, "UTF-8")}")
