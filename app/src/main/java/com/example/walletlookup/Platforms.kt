@@ -97,3 +97,32 @@ fun exchangeNote(address: String, platform: Platform?, folder: String = "", name
     return tr("%s deposit address: the exchange moves the coins to its own wallets, so this isn't the account balance on %s.")
         .replace("%s", exchange)
 }
+
+/** How sure the app is that an address belongs to an exchange. Only the first two ever show the exchange's badge. */
+enum class Attribution {
+    /** On the built-in list of publicly labelled exchange wallets. */
+    CONFIRMED,
+    /** You put it in an exchange folder or named it after one (e.g. your own Binance deposit address). */
+    YOUR_LABEL,
+    /** Guessed from its history (it forwards its money to an exchange). Never shown as fact. */
+    POSSIBLE,
+}
+
+/** An address identified as an exchange's: which exchange, how sure, and whether it's the exchange's own big wallet. */
+data class ExchangeId(val name: String, val attribution: Attribution, val ownWallet: Boolean)
+
+/** Proper names for exchanges mentioned in a folder or wallet name. */
+private val EXCHANGE_NAMES = mapOf(
+    "binance" to "Binance", "bybit" to "Bybit", "okx" to "OKX", "coinbase" to "Coinbase", "kraken" to "Kraken",
+    "kucoin" to "KuCoin", "bitfinex" to "Bitfinex", "gemini" to "Gemini", "htx" to "HTX", "huobi" to "HTX",
+    "gate" to "Gate.io", "crypto.com" to "Crypto.com", "mexc" to "MEXC", "bitget" to "Bitget", "bingx" to "BingX",
+    "bitmart" to "BitMart", "upbit" to "Upbit", "wazirx" to "WazirX", "coindcx" to "CoinDCX",
+)
+
+fun exchangeIdentity(address: String, platform: Platform?, folder: String = "", name: String = ""): ExchangeId? {
+    knownPlatform(address)?.let { return ExchangeId(it, Attribution.CONFIRMED, ownWallet = true) }
+    val text = "$folder $name".lowercase()
+    EXCHANGES.firstOrNull { it in text }?.let { return ExchangeId(EXCHANGE_NAMES[it] ?: it, Attribution.YOUR_LABEL, ownWallet = false) }
+    platform?.takeIf { it.how.startsWith("Likely") }?.let { return ExchangeId(it.name, Attribution.POSSIBLE, ownWallet = false) }
+    return null
+}

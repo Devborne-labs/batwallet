@@ -258,9 +258,9 @@ class MainActivity : FragmentActivity() {
                 onDispose {}
             }
             MaterialTheme(colorScheme = if (dark) DarkBat else LightBat, typography = BatType) {
-                if (locked) {
-                    LockScreen(onUnlock = ::authenticate)
-                } else {
+                // The app stays alive under the lock screen, so unlocking returns to the exact page you were on
+                // (a history, a transaction…) instead of starting again from Home.
+                Box(Modifier.fillMaxSize()) {
                     App(
                         store = store,
                         dark = dark,
@@ -273,8 +273,10 @@ class MainActivity : FragmentActivity() {
                         onLockTimeoutChange = { lockTimeout = it; store.lockTimeoutSec = it },
                         confirm = ::confirm,
                         shared = shared,
+                        locked = locked,
                         onSharedHandled = { shared = null },
                     )
+                    if (locked) LockScreen(onUnlock = ::authenticate)
                 }
             }
         }
@@ -373,7 +375,11 @@ private fun BatLogo(size: Dp) {
 
 @Composable
 private fun LockScreen(onUnlock: () -> Unit) {
-    Surface(Modifier.fillMaxSize()) {
+    // Covers the app completely; Back does nothing here (it must not reach the pages underneath).
+    BackHandler {}
+    Surface(
+        Modifier.fillMaxSize().pointerInput(Unit) { awaitPointerEventScope { while (true) awaitPointerEvent() } },
+    ) {
         // Logo sits in the upper part of the screen so the system fingerprint sheet never covers it.
         Column(
             Modifier.fillMaxSize().systemBarsPadding().padding(32.dp),
@@ -427,6 +433,8 @@ private fun App(
     confirm: (String, () -> Unit) -> Unit,
     /** Text shared to Batwallet from another app (Telegram, a browser…), waiting to be checked. */
     shared: String?,
+    /** True while the lock screen covers the app: no dialogs may pop up over it. */
+    locked: Boolean,
     onSharedHandled: () -> Unit,
 ) {
     val context = LocalContext.current
@@ -1051,20 +1059,20 @@ private fun App(
     var crashAsk by remember {
         mutableStateOf(BatApp.lastCrash(context)?.takeIf { it.hashCode() != store.crashPrompted })
     }
-    crashAsk?.let { report ->
+    crashAsk?.takeIf { !locked }?.let { report ->
         fun done() { store.crashPrompted = report.hashCode(); crashAsk = null }
         AlertDialog(
             onDismissRequest = { done() },
             title = { Text("Batwallet closed unexpectedly") },
-            text = { Text("Send the crash report to @MalluWayne on Telegram so it can be fixed? It has only app and phone details, no wallets.") },
-            confirmButton = { TextButton(onClick = { done(); sendReportOnTelegram(context, report) }) { Text("Send on Telegram") } },
+            text = { Text("Report the crash on GitHub so it can be fixed? The report has only app and phone details, no wallets.") },
+            confirmButton = { TextButton(onClick = { done(); reportOnGitHub(context, report) }) { Text("Report on GitHub") } },
             dismissButton = { TextButton(onClick = { done() }) { Text("Not now") } },
         )
     }
     // First time on each tab: a few skippable tips.
     var tipsSeen by remember { mutableStateOf(store.tipsSeen) }
     val tipsFor = when { address.isNotEmpty() -> null; tab == TAB_WALLETS -> "wallets"; tab == TAB_SETTINGS -> "settings"; else -> "home" }
-    if (crashAsk == null && tipsFor != null && tipsFor !in tipsSeen) {
+    if (!locked && crashAsk == null && tipsFor != null && tipsFor !in tipsSeen) {
         TipsDialog(
             TIPS.getValue(tipsFor),
             onDone = { tipsSeen = tipsSeen + tipsFor; store.tipsSeen = tipsSeen },
@@ -1232,9 +1240,13 @@ private fun HomeTab(
                 }
             }
             message?.let { m -> item { Text(m, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall) } }
-            // Not one person's balance: a very busy business / bot address (red warning) or an exchange wallet (note),
-            // shown above the balance so it's read first.
-            if (type != null && results.isNotEmpty()) {
+            // Exchange identity (badge, name, balance warning) or, for a very busy business / bot address, a red
+            // warning, shown above the balance so it's read first.
+            val exchangeId = if (type != null && results.isNotEmpty())
+                exchangeIdentity(address, platform, savedWallet?.group.orEmpty(), savedWallet?.name.orEmpty()) else null
+            if (exchangeId != null) {
+                item { ExchangeCard(exchangeId) }
+            } else if (type != null && results.isNotEmpty()) {
                 val sentTx = results.mapNotNull { r -> r.rows.firstOrNull { it.first == "Transactions sent" }?.second?.toLongOrNull() }.maxOrNull() ?: 0
                 exchangeNote(address, platform, savedWallet?.group.orEmpty(), savedWallet?.name.orEmpty(), sentTx)?.let { note ->
                     item { WalletNote(note, warning = isBusyAddress(address, sentTx)) }
@@ -1242,7 +1254,9 @@ private fun HomeTab(
             }
             if (type != null && results.isNotEmpty()) item {
                 BalanceCard(type, results, resultsTime, loading,
-                    exchange = isExchangeWallet(address, savedWallet?.group.orEmpty(), savedWallet?.name.orEmpty()))
+                    exchange = exchangeId != null || isExchangeWallet(address, savedWallet?.group.orEmpty(), savedWallet?.name.orEmpty()),
+                    // An exchange's own wallet holds everyone's coins: its total is hidden until you ask for it.
+                    hiddenAtFirst = exchangeId?.ownWallet == true)
             }
             if (!tokens.isNullOrEmpty()) item { OtherTokensCard(tokens) }
             if (type != null) item { SafetyCard(safety, safetyLoading, twin, savedWallet, platform) }
@@ -1328,18 +1342,40 @@ private fun TotalHeader(
  * are combined under one total, with a short section for each network that holds something.
  */
 @Composable
-private fun BalanceCard(type: AddrType, results: List<ChainResult>, time: Long?, loading: Boolean, exchange: Boolean = false) {
+private fun BalanceCard(
+    type: AddrType,
+    results: List<ChainResult>,
+    time: Long?,
+    loading: Boolean,
+    exchange: Boolean = false,
+    /** An exchange's own wallet: the total is folded away until "Show anyway" (it's everyone's coins together). */
+    hiddenAtFirst: Boolean = false,
+) {
     val ok = results.filter { it.error == null }
     val active = ok.filter { it.active }
     val failed = results.filter { it.error != null }
     val multi = results.size > 1
     val sections = if (multi) active else ok
+    var revealed by remember(hiddenAtFirst) { mutableStateOf(!hiddenAtFirst) }
 
     Card(Modifier.fillMaxWidth()) {
         Column(Modifier.padding(18.dp)) {
             Text(if (multi) type.label else results.first().network,
                 style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            if (!revealed) {
+                Text("Balance hidden", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold,
+                    modifier = Modifier.padding(top = 4.dp))
+                Text("It's the exchange's money, not one person's.", style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant)
+                TextButton(onClick = { revealed = true }, contentPadding = PaddingValues(0.dp)) { Text("Show anyway") }
+                return@Column
+            }
             Text(hideable(money(totalsOf(ok).usd)), style = MaterialTheme.typography.headlineMedium, fontWeight = FontWeight.SemiBold)
+            // Scope: what this number is (and isn't) for exchange addresses.
+            if (exchange) {
+                Text("On-chain balance of this address only", style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
             if (multi && active.isEmpty() && failed.isEmpty()) {
                 Text("Empty on every network", style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant)
@@ -1623,6 +1659,12 @@ private fun WalletsTab(
                                             DropdownMenu(expanded = folderMenu, onDismissRequest = { folderMenu = false }) {
                                                 DropdownMenuItem(text = { Text("Rename folder") },
                                                     onClick = { folderMenu = false; renaming = group })
+                                                // Archive (or bring back) every wallet in this folder at once.
+                                                val allArchived = wallets.all { it.archived }
+                                                DropdownMenuItem(
+                                                    text = { Text(if (allArchived) "Unarchive folder" else "Archive folder") },
+                                                    onClick = { folderMenu = false; onArchive(wallets.map { it.address }, !allArchived) },
+                                                )
                                             }
                                         }
                                         if (editOrder && pg.orderedNames.size > 1) {
@@ -2269,13 +2311,39 @@ private fun SettingsTab(
             )
         }
         SettingsSection("Support") {
+        // Updates come from the GitHub Releases page; the APK is downloaded in the browser and installed from there.
+        SettingGroup("Updates", tr("Version") + " " + BatApp.appVersion(context), open == "updates", { toggle("updates") }) {
+            var checking by remember { mutableStateOf(false) }
+            var result by remember { mutableStateOf<Release?>(null) }
+            var checked by remember { mutableStateOf(false) }
+            OutlinedButton(enabled = !checking, onClick = {
+                checking = true
+                scope.launch { result = latestRelease(); checked = true; checking = false }
+            }) { Text(if (checking) "Checking…" else "Check for updates") }
+            val latest = result
+            when {
+                !checked -> {}
+                latest == null -> Text("Couldn't reach GitHub. Try again later.", style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.error)
+                isNewerVersion(latest.version, BatApp.appVersion(context)) -> {
+                    Text(tr("Version") + " ${latest.version} " + tr("is available"), fontWeight = FontWeight.SemiBold,
+                        modifier = Modifier.padding(top = 8.dp))
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        TextButton(onClick = { openInBrowser(context, latest.apkUrl ?: latest.pageUrl) }) { Text("Download") }
+                        TextButton(onClick = { openInBrowser(context, latest.pageUrl) }) { Text("What's new") }
+                    }
+                }
+                else -> Text("You have the latest version.", style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(top = 8.dp))
+            }
+        }
         SettingGroup(
             "Report a problem",
-            tr(if (crash != null) "The app crashed last time" else "Telegram"),
+            tr(if (crash != null) "The app crashed last time" else "GitHub"),
             open == "report", { toggle("report") },
         ) {
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.padding(vertical = 8.dp)) {
-                OutlinedButton(onClick = { sendReportOnTelegram(context, crash) }) { Text("Send on Telegram") }
+                OutlinedButton(onClick = { reportOnGitHub(context, crash) }) { Text("Report on GitHub") }
                 if (crash != null) TextButton(onClick = { BatApp.clearCrash(context); crash = null }) { Text("Dismiss") }
             }
         }
@@ -2283,10 +2351,15 @@ private fun SettingsTab(
         }
         Spacer(Modifier.height(28.dp))
         Text(
-            tr("Made with ♥︎ by @MalluWayne & Claude"),
+            tr("Made with ♥︎ by MalluWayne & Claude"),
             style = MaterialTheme.typography.bodyMedium,
             fontWeight = FontWeight.SemiBold,
-            modifier = Modifier.clip(RoundedCornerShape(8.dp)).clickable { openInBrowser(context, "https://t.me/MalluWayne") }
+        )
+        Text(
+            "github.com/$GITHUB_REPO",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.primary,
+            modifier = Modifier.clip(RoundedCornerShape(8.dp)).clickable { openInBrowser(context, GITHUB_URL) }
                 .padding(vertical = 6.dp),
         )
         Text(
@@ -2331,6 +2404,7 @@ private fun SettingGroup(title: String, summary: String, expanded: Boolean, onTo
                 "Backup" -> Icon(Icons.Filled.Refresh, null, Modifier.size(20.dp))
                 "Etherscan API key" -> Icon(Icons.Filled.Build, null, Modifier.size(20.dp))
                 "Report a problem" -> Icon(Icons.Filled.Info, null, Modifier.size(20.dp))
+                "Updates" -> Icon(Icons.Filled.Refresh, null, Modifier.size(20.dp))
                 else -> Text(
                     when (title) { "Appearance" -> "◐"; "Language" -> "Aa"; "Currency" -> "$"; else -> "↗" },
                     style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.SemiBold,
@@ -2380,28 +2454,6 @@ private fun ChipRow(options: List<Pair<Int, String>>, selected: Int, onPick: (In
     }
 }
 
-/**
- * Sends a report to the developer: copies it (crash details, or just phone and app info) and opens
- * @MalluWayne's Telegram chat, where it only needs to be pasted.
- */
-fun sendReportOnTelegram(context: Context, crash: String?) {
-    val report = crash ?: buildString {
-        appendLine("Batwallet ${BatApp.appVersion(context)} · Android ${Build.VERSION.RELEASE} (API ${Build.VERSION.SDK_INT})")
-        appendLine("${Build.MANUFACTURER} ${Build.MODEL}")
-        appendLine()
-        append("Problem: ")
-    }
-    val cm = context.getSystemService(android.content.ClipboardManager::class.java)
-    cm.setPrimaryClip(android.content.ClipData.newPlainText("Batwallet report", "Batwallet report\n\n$report"))
-    android.widget.Toast.makeText(context, tr("Report copied. In the chat, long-press the message box, tap Paste and send."),
-        android.widget.Toast.LENGTH_LONG).show()
-    // tg:// opens the Telegram app straight to the chat; the https link is the fallback (Telegram Web or the browser).
-    val opened = runCatching {
-        context.startActivity(Intent(Intent.ACTION_VIEW, android.net.Uri.parse("tg://resolve?domain=MalluWayne"))
-            .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
-    }.isSuccess
-    if (!opened) openInBrowser(context, "https://t.me/MalluWayne")
-}
 
 /** Asks which network a 0x address is on (the same address works on every EVM network). */
 @Composable

@@ -232,8 +232,14 @@ fun RecentTxSection(
                                 Text(tr("Lookalike of") + " " + walletLabel(twin) + " · " + tr("don't copy"),
                                     style = MaterialTheme.typography.labelSmall, fontWeight = FontWeight.SemiBold, color = OutRed)
                             }
-                            Text((if (t.incoming) "From " else "To ") + (other ?: net), maxLines = 1,
-                                overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis, fontWeight = FontWeight.Medium)
+                            Row(verticalAlignment = androidx.compose.ui.Alignment.CenterVertically) {
+                                t.counterparty?.takeIf { names.labelFor(it, net) == null }?.let(::knownPlatform)?.let {
+                                    ExchangeBadge(it, 16.dp)
+                                    Spacer(Modifier.width(6.dp))
+                                }
+                                Text((if (t.incoming) "From " else "To ") + (other ?: net), maxLines = 1,
+                                    overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis, fontWeight = FontWeight.Medium)
+                            }
                             // Which of your wallets it was, then when.
                             Text((walletName(w) ?: net) + " · " + (if (t.time > 0) shortDate(t.time / 1000) else tr("Pending")),
                                 style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1,

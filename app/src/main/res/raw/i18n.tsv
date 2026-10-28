@@ -357,3 +357,27 @@ Hide	Скрыть	छिपाएं
 Very busy address (%d transactions sent): this is an exchange, company or bot wallet, not one person's.	Очень активный адрес (%d отправленных транзакций): это кошелёк биржи, компании или бота, а не одного человека.	बहुत व्यस्त पता (%d लेन-देन भेजे गए): यह किसी एक्सचेंज, कंपनी या बॉट का वॉलेट है, किसी एक व्यक्ति का नहीं।
 Not a personal wallet	Не личный кошелёк	निजी वॉलेट नहीं
 Exchange wallet	Кошелёк биржи	एक्सचेंज वॉलेट
+Updates	Обновления	अपडेट
+Check for updates	Проверить обновления	अपडेट जांचें
+Checking…	Проверка…	जांच हो रही है…
+is available	доступна	उपलब्ध है
+Download	Скачать	डाउनलोड
+What's new	Что нового	नया क्या है
+You have the latest version.	У вас последняя версия.	आपके पास नया संस्करण है।
+Couldn't reach GitHub. Try again later.	Не удалось связаться с GitHub. Попробуйте позже.	GitHub तक नहीं पहुंच सके। बाद में कोशिश करें।
+Report on GitHub	Сообщить на GitHub	GitHub पर रिपोर्ट करें
+Made with ♥︎ by MalluWayne & Claude	Сделано с ♥︎ MalluWayne и Claude	MalluWayne और Claude ने ♥︎ से बनाया
+Report the crash on GitHub so it can be fixed? The report has only app and phone details, no wallets.	Сообщить о сбое на GitHub, чтобы его исправили? В отчёте только данные приложения и телефона, без кошельков.	क्रैश GitHub पर रिपोर्ट करें ताकि ठीक हो सके? रिपोर्ट में सिर्फ़ ऐप और फ़ोन की जानकारी है, कोई वॉलेट नहीं।
+Possibly	Возможно	शायद
+Confirmed exchange wallet (public label)	Подтверждённый кошелёк биржи (публичная метка)	पुष्ट एक्सचेंज वॉलेट (सार्वजनिक लेबल)
+Exchange deposit address (your label)	Адрес пополнения биржи (ваша метка)	एक्सचेंज डिपॉज़िट पता (आपका लेबल)
+Not confirmed: guessed from where its money goes	Не подтверждено: предположение по тому, куда уходят деньги	पुष्ट नहीं: पैसा कहां जाता है उससे अनुमान
+Not an account balance	Это не баланс аккаунта	यह अकाउंट बैलेंस नहीं है
+This wallet holds many customers' coins together. Its balance isn't any one customer's balance on %s.	В этом кошельке монеты многих клиентов. Его баланс — не баланс одного клиента на %s.	इस वॉलेट में कई ग्राहकों के कॉइन एक साथ हैं। इसका बैलेंस %s पर किसी एक ग्राहक का बैलेंस नहीं है।
+%s moves deposits on to its own wallets, so this address's balance isn't the account balance on %s.	%s переводит пополнения в свои кошельки, поэтому баланс этого адреса — не баланс аккаунта на %s.	%s जमा को अपने वॉलेट में भेज देता है, इसलिए इस पते का बैलेंस %s पर अकाउंट बैलेंस नहीं है।
+Balance hidden	Баланс скрыт	बैलेंस छिपा है
+It's the exchange's money, not one person's.	Это деньги биржи, а не одного человека.	यह एक्सचेंज का पैसा है, किसी एक व्यक्ति का नहीं।
+Show anyway	Всё равно показать	फिर भी दिखाएं
+On-chain balance of this address only	Только баланс этого адреса в блокчейне	सिर्फ़ इस पते का ऑन-चेन बैलेंस
+Archive folder	Архивировать папку	फ़ोल्डर आर्काइव करें
+Unarchive folder	Вернуть папку из архива	फ़ोल्डर आर्काइव से निकालें

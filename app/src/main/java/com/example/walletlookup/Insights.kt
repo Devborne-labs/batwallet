@@ -600,3 +600,50 @@ private fun tronHex(address: String): String {
     val bytes = (ByteArray(maxOf(0, 25 - raw.size)) + raw).takeLast(25) // 0x41 + 20 address bytes + 4 checksum bytes
     return bytes.subList(1, 21).joinToString("") { "%02x".format(it) }
 }
+
+/**
+ * The last history loaded for each address (kept in memory and on the phone), so reopening a history shows it at
+ * once while the fresh one loads.
+ */
+object HistoryCache {
+    private val memory = HashMap<String, List<History>>()
+    private fun key(address: String) = "histcache:" + address.lowercase()
+
+    fun load(address: String): List<History>? = memory[address.lowercase()] ?: runCatching {
+        val arr = JSONArray(historyPrefs?.getString(key(address), null) ?: return null)
+        (0 until arr.length()).map { i ->
+            val h = arr.getJSONObject(i)
+            val items = h.getJSONArray("items")
+            History(
+                h.getString("network"),
+                (0 until items.length()).map { k ->
+                    val t = items.getJSONObject(k)
+                    fun s(name: String) = t.optString(name).ifEmpty { null }
+                    Transfer(t.getBoolean("in"), BigDecimal(t.getString("amt")), s("cp"), t.getLong("t"), s("url"),
+                        s("hash"), s("from"), s("to"), t.optString("sym", "USDT"))
+                },
+                note = h.optString("note").ifEmpty { null },
+                supported = h.optBoolean("supported", true),
+                canLoadMore = h.optBoolean("more", false),
+            )
+        }.also { memory[address.lowercase()] = it }
+    }.getOrNull()
+
+    fun save(address: String, list: List<History>) {
+        val ok = list.filter { it.error == null }
+        if (ok.isEmpty()) return
+        memory[address.lowercase()] = ok
+        val arr = JSONArray()
+        ok.forEach { h ->
+            val items = JSONArray()
+            h.items.forEach { t ->
+                items.put(JSONObject().put("in", t.incoming).put("amt", t.amount.toPlainString()).put("cp", t.counterparty ?: "")
+                    .put("t", t.time).put("url", t.txUrl ?: "").put("hash", t.hash ?: "").put("from", t.from ?: "")
+                    .put("to", t.to ?: "").put("sym", t.symbol))
+            }
+            arr.put(JSONObject().put("network", h.network).put("note", h.note ?: "").put("supported", h.supported)
+                .put("more", h.canLoadMore).put("items", items))
+        }
+        historyPrefs?.edit()?.putString(key(address), arr.toString())?.apply()
+    }
+}

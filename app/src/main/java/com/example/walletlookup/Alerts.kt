@@ -273,8 +273,12 @@ object Alerts {
 
             // Respect the "only alert above" setting; small coin moves (gas fees) are skipped when a minimum is set.
             val min = BigDecimal(store.alertMin)
+            // Exchange wallets: money leaving is the exchange sweeping it to its own wallets, not you paying anyone,
+            // so only incoming payments alert.
+            val exchange = isExchangeWallet(w.address, w.group, w.name)
             val worth = changes.filter { (key, diff) ->
-                if (key.startsWith("USDT|")) diff.abs() >= min else min.signum() == 0
+                (!exchange || diff.signum() > 0) &&
+                    (if (key.startsWith("USDT|")) diff.abs() >= min else min.signum() == 0)
             }
             if (worth.isEmpty()) continue
 

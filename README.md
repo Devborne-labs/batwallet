@@ -4,7 +4,7 @@ A minimalist, **read-only** Android crypto wallet viewer. Paste, share or scan a
 detects the network, shows balances (USDT-focused), history and safety checks. It never asks for
 private keys and can't move funds.
 
-Made by [@MalluWayne](https://t.me/MalluWayne) with Claude.
+Made by MalluWayne with Claude.
 
 ## Screenshots
 

@@ -47,6 +47,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.launch
 import java.math.BigDecimal
 
 private fun short(a: String) = if (a.length > 16) a.take(8) + "…" + a.takeLast(6) else a
@@ -173,17 +174,37 @@ fun HistoryScreen(
     balances: List<ChainResult> = emptyList(),
 ) {
     val context = androidx.compose.ui.platform.LocalContext.current
-    var data by remember { mutableStateOf(preloaded) }
+    // Shown at once: what Home just loaded, or the last history saved for this address. A fresh copy loads behind it.
+    var data by remember { mutableStateOf(preloaded ?: HistoryCache.load(address)) }
     var loading by remember { mutableStateOf(false) }
     var reload by remember { mutableIntStateOf(if (preloaded == null) 1 else 0) }
     var limit by remember { mutableIntStateOf(25) }
     var selected by remember { mutableStateOf<Pair<String, Transfer>?>(null) }
 
     LaunchedEffect(reload) {
-        if (reload == 0) return@LaunchedEffect
+        if (reload == 0) { preloaded?.let { HistoryCache.save(address, it) }; return@LaunchedEffect }
         loading = true
         try {
-            data = history(address, networks, limit)
+            val nets = networks
+            if (nets != null && nets.size > 1 && netOf(address) == null) {
+                // Several networks: each one appears as soon as it has loaded, instead of all waiting for the slowest.
+                val order = nets.toList()
+                val fresh = java.util.concurrent.ConcurrentHashMap<String, History>()
+                kotlinx.coroutines.coroutineScope {
+                    order.forEach { n ->
+                        launch {
+                            val h = runCatching { history(address, setOf(n), limit) }.getOrNull().orEmpty()
+                            h.forEach { fresh[it.network] = it }
+                            // Fresh networks replace their old copy; the rest stay until theirs arrive.
+                            data = (data.orEmpty().filter { it.network !in fresh.keys } + fresh.values)
+                                .sortedBy { order.indexOf(it.network).let { i -> if (i < 0) Int.MAX_VALUE else i } }
+                        }
+                    }
+                }
+            } else {
+                data = history(address, networks, limit)
+            }
+            data?.let { HistoryCache.save(address, it) }
         } catch (e: CancellationException) {
             throw e
         } catch (_: Exception) {
@@ -323,10 +344,17 @@ private fun TransferRow(t: Transfer, network: String, names: Map<String, String>
             DirectionIcon(t.symbol, t.incoming)
             Spacer(Modifier.width(12.dp))
             Column(Modifier.weight(1f)) {
-                Text(
-                    tr(if (t.incoming) "From" else "To") + " " + (saved ?: exchange ?: other?.let(::tiny) ?: "—"),
-                    fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis,
-                )
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    // A confirmed exchange on the other side gets its badge (direction: the coin's ↓ / ↑ and the colour).
+                    if (saved == null && exchange != null) {
+                        ExchangeBadge(exchange, 18.dp)
+                        Spacer(Modifier.width(6.dp))
+                    }
+                    Text(
+                        tr(if (t.incoming) "From" else "To") + " " + (saved ?: exchange ?: other?.let(::tiny) ?: "—"),
+                        fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis,
+                    )
+                }
                 // Address poisoning: looks like one of yours but isn't.
                 twin?.let {
                     Text(tr("Lookalike of") + " " + walletLabel(it) + " · " + tr("don't copy"),
@@ -403,8 +431,14 @@ internal fun TransactionScreen(
         val tag = names.labelFor(addr, network) ?: knownPlatform(addr)
         Card(Modifier.fillMaxWidth().clickable { onOpenAddress(addr) }) {
             Column(Modifier.padding(14.dp)) {
-                Text(label + (tag?.let { " · $it" } ?: ""), style = MaterialTheme.typography.labelMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant)
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text(label + (tag?.let { " · $it" } ?: ""), style = MaterialTheme.typography.labelMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    knownPlatform(addr)?.takeIf { names.labelFor(addr, network) == null }?.let {
+                        Spacer(Modifier.width(6.dp))
+                        ExchangeBadge(it, 16.dp)
+                    }
+                }
                 Text(addr, style = MaterialTheme.typography.bodySmall.copy(fontFamily = FontFamily.Monospace))
                 if (tag == null) lookalikeOf(addr)?.let {
                     Text(tr("Lookalike of") + " " + walletLabel(it) + " · " + tr("don't copy"),
