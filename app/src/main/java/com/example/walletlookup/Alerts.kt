@@ -215,7 +215,7 @@ object Alerts {
     private const val WEEK_MS = 7 * DAY_MS
     private val lastFill = HashMap<String, Long>()
     /** Per wallet: when its current payment notification started, its lines, and how many payments it covers. */
-    private val burst = java.util.concurrent.ConcurrentHashMap<String, Triple<Long, List<String>, Int>>()
+    private val burst = java.util.concurrent.ConcurrentHashMap<String, Triple<Long, List<Pair<String, String>>, Int>>()
     private val searchedAt = java.util.concurrent.ConcurrentHashMap<String, Long>()
 
     /**
@@ -398,36 +398,40 @@ object Alerts {
             }
             if (worth.isEmpty()) continue
 
-            val usdt = worth.filter { it.first.startsWith("USDT|") }.fold(BigDecimal.ZERO) { s, c -> s + c.second }
-            val received = if (usdt.signum() != 0) usdt.signum() > 0 else worth.any { it.second.signum() > 0 }
-            // Only the wallet's saved name is shown, never its address.
-            val title = tr(if (received) "Received" else "Sent") + " · " + walletLabel(w)
-            // Short: one line per payment, its value in your currency and the network ("+700.00 USDT · TON").
             // A tiny coin change next to a real payment (a fee, or dust) is left out.
             val shown = worth.filter { (key, diff) ->
                 val sym = key.substringBefore("|")
                 worth.size == 1 || sym.uppercase().startsWith("USD") ||
                     (transferUsd(diff.abs(), sym) ?: BigDecimal.ONE) >= BigDecimal("0.01")
             }
-            val text = shown.joinToString("\n") { (key, diff) ->
+            // Each payment as (amount, details): "+700.00 USDT" and "USDT on TON · 23:30" (coins also give the coin
+            // amount: "9.2636 TRX on Tron · 19:49"). Only the wallet's saved name is shown, never its address.
+            val clock = java.time.format.DateTimeFormatter.ofPattern("HH:mm").withZone(java.time.ZoneId.systemDefault())
+            val payments = shown.map { (key, diff) ->
                 val (sym, net) = key.split("|", limit = 2)
-                (if (diff.signum() > 0) "+" else "−") + transferValue(diff.abs(), sym) + " · $net"
+                val coin = !sym.uppercase().startsWith("USD")
+                val at = matches[key]?.time?.takeIf { it > 0 } ?: now
+                ((if (diff.signum() > 0) "+" else "−") + transferValue(diff.abs(), sym)) to
+                    ((if (coin) "${fmt(diff.abs())} $sym" else sym) + " " + tr("on") + " $net · " + clock.format(java.time.Instant.ofEpochMilli(at)))
             }
+            val balance = store.loadCache(w.address)?.totals?.usd?.let { tr("Balance") + " " + money(it) }
             // Payments at or above the "big payment" amount use a louder channel and say so.
             val bigMin = store.bigPayment
             val big = bigMin > 0 && worth.any { (k, d) -> k.startsWith("USDT|") && d.abs() >= BigDecimal(bigMin) }
             // Several payments to one wallet within 2 minutes: one notification, updated, instead of a stack.
             val nowMs = System.currentTimeMillis()
             val earlier = burst[w.address]?.takeIf { nowMs - it.first < 120_000L }
-            val lines = (earlier?.second.orEmpty() + text.lines()).takeLast(6)
-            val count = (earlier?.third ?: 0) + text.lines().size
-            burst[w.address] = Triple(nowMs, lines, count)
-            val shownTitle = (if (big) "Big payment · " + title else title) + (if (count > 1) " · $count " + tr("payments") else "")
-            notify(
-                context, if (earlier != null) earlier.first.toInt() xor w.address.hashCode() else nowMs.toInt() xor w.address.hashCode(),
-                shownTitle, lines.joinToString("\n"), if (big) BIG_CHANNEL else CHANNEL,
-            )
-            if (earlier != null) burst[w.address] = Triple(earlier.first, lines, count) // keep the same notification
+            val all = (earlier?.second.orEmpty() + payments).takeLast(5)
+            val count = (earlier?.third ?: 0) + payments.size
+            val start = earlier?.first ?: nowMs
+            burst[w.address] = Triple(start, all, count)
+            // One payment:  "+700.00 USDT · Clean trust · Ton"  /  "USDT on TON · 23:30" + balance.
+            // Several:      "3 payments · Clean trust · BSC"   /  one line each + balance.
+            val title = (if (big) tr("Big payment") + " · " else "") +
+                (if (count == 1) all.single().first else "$count " + tr("payments")) + " · " + walletLabel(w)
+            val text = (if (count == 1) listOf(all.single().second) else all.map { (amount, details) -> "$amount · $details" }) +
+                listOfNotNull(balance)
+            notify(context, start.toInt() xor w.address.hashCode(), title, text.joinToString("\n"), if (big) BIG_CHANNEL else CHANNEL)
         }
     }
 }
