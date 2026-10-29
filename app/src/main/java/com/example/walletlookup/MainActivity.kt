@@ -732,6 +732,22 @@ private fun App(
         }
         onDispose { store.stopListening(listener) }
     }
+    // While Batwallet is open, check for payments every 20 seconds whatever the alert mode, so they show up (and
+    // notify) within seconds instead of after a pull-down. Only while it's on screen; background checks are the
+    // alert mode's job. With alerts off it refreshes balances every minute instead.
+    val lifecycle = androidx.lifecycle.compose.LocalLifecycleOwner.current.lifecycle
+    LaunchedEffect(Unit) {
+        var rounds = 0
+        while (true) {
+            delay(20_000)
+            if (!lifecycle.currentState.isAtLeast(Lifecycle.State.RESUMED)) continue
+            if (store.alertsEnabled) {
+                runCatching { kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) { Alerts.checkWallets(context) } }
+            } else if (++rounds % 3 == 0 && syncing.isEmpty()) {
+                syncAll()
+            }
+        }
+    }
     // A payment came in (alerts recorded it): refresh every wallet's balance and Home's recent transactions,
     // not just that one wallet's balance. At most every 20 seconds, so a burst of payments is one refresh.
     DisposableEffect(Unit) {
@@ -2396,6 +2412,15 @@ private fun SettingsTab(
                     }
                 }
                 RadioRow(!instant, "Battery saver", "15 min · 30 s charging") { setInstant(false) }
+                // Say plainly what each mode means for how fast a payment shows up.
+                Text(
+                    if (!instant) "Payments can show up 15 minutes late or more while the phone isn't charging. Choose Instant for alerts within 30 seconds."
+                    else if (!batteryOk) "Your phone may still pause Batwallet in the background, delaying alerts. Allow background running below."
+                    else "Alerts within about 30 seconds.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = if (instant && !batteryOk) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(start = 4.dp, top = 2.dp, bottom = 6.dp),
+                )
                 Label("Minimum")
                 ChipRow(listOf(0 to "Any amount", 1 to "1 USDT", 10 to "10 USDT", 100 to "100 USDT"), alertMin) { alertMin = it; store.alertMin = it }
                 Label("Big payment")
