@@ -825,19 +825,26 @@ private fun App(
     // balances (cached or fresh) so history only asks the networks where the wallet is used. It is keyed on the
     // address alone so a balance refresh finishing can't interrupt it halfway.
     LaunchedEffect(address) {
-        safetyResult = null
-        homeHistory = null
         if (detect(address) == null) {
+            safetyResult = null
+            homeHistory = null
             safetyLoading = false
             return@LaunchedEffect
         }
-        safetyLoading = true
+        // The saved check and history show at once. The check runs again only when it's over 6 hours old; the
+        // history (for the last-5 list) refreshes quietly in the background.
+        val saved = store.loadSafety(address)
+        val fresh = saved != null && System.currentTimeMillis() - saved.first < 6 * 3_600_000L
+        safetyResult = saved?.second
+        homeHistory = HistoryCache.load(address)
+        safetyLoading = !fresh
         try {
             withTimeoutOrNull(60_000) { snapshotFlow { results.isNotEmpty() || (!loading && message != null) }.first { it } }
             if (results.isNotEmpty()) {
                 val h = history(address, activeNetworks(results))
                 homeHistory = h
-                safetyResult = safety(address, h)
+                HistoryCache.save(address, h)
+                if (!fresh) safety(address, h).let { safetyResult = it; store.saveSafety(address, it) }
             }
         } catch (e: CancellationException) {
             throw e
@@ -1011,6 +1018,10 @@ private fun App(
                     safety = safetyResult,
                     safetyLoading = safetyLoading,
                     onHistory = { historyFor = address },
+                    recentOf = { a ->
+                        if (a != address) emptyList()
+                        else homeHistory.orEmpty().flatMap { h -> h.items.map { h.network to it } }.sortedByDescending { it.second.time }
+                    },
                     onToggleHidden = toggleHidden,
                     onScan = { scanning = true },
                     onReceive = { receiveFor = it },
@@ -1207,6 +1218,8 @@ private fun HomeTab(
     safety: Safety?,
     safetyLoading: Boolean,
     onHistory: () -> Unit,
+    /** This address's latest transfers (network, transfer), newest first, for the list under the safety check. */
+    recentOf: (String) -> List<Pair<String, Transfer>> = { emptyList() },
     onToggleHidden: () -> Unit,
     onScan: () -> Unit,
     onReceive: (SavedAddress) -> Unit,
@@ -1289,14 +1302,8 @@ private fun HomeTab(
             if (recentTx.isNotEmpty()) {
                 item {
                     // Folder · name; the short address only when two of your wallets share that name.
-                    val walletName: (String) -> String? = { w ->
-                        saved.firstOrNull { it.address == w }?.let { s ->
-                            val twins = saved.count { !it.contact && it.name.equals(s.name, true) } > 1
-                            val raw = rawAddress(s.address)
-                            (if (s.group.isNotBlank()) s.group + " · " else "") + s.name +
-                                (if (twins) " · " + raw.take(if (raw.startsWith("0x")) 6 else 4) + "…" + raw.takeLast(4) else "")
-                        }
-                    }
+                    // Folder · name; the saved name is enough (no shortened address).
+                    val walletName: (String) -> String? = { w -> saved.firstOrNull { it.address == w }?.let(::walletLabel) }
                     var all by remember { mutableStateOf(false) }
                     RecentTxSection(
                         recentTx.take(5),
@@ -1388,6 +1395,13 @@ private fun HomeTab(
             val unused = results.isNotEmpty() && results.all { it.error == null && !it.active }
             val incomplete = results.any { it.error != null }
             if (type != null) item { SafetyCard(safety, safetyLoading, twin, savedWallet, platform, unused, incomplete) }
+            // This address's last 5 transactions, and a button to its full history.
+            val last5 = recentOf(address).take(5)
+            if (type != null && last5.isNotEmpty()) item {
+                RecentTxSection(last5.map { (net, t) -> Triple(address, net, t) }, names = addressNames, walletName = { null },
+                    onOpen = onOpenTx, title = "Recent transactions")
+                OutlinedButton(onClick = onHistory, modifier = Modifier.fillMaxWidth().padding(top = 10.dp)) { Text("See all transactions") }
+            }
         }
     }
 
@@ -2570,7 +2584,7 @@ private fun SettingsTab(
                             .verticalScroll(rememberScrollState()))
                     }
                     // Downloaded and installed by the app (progress in its own dialog); the APK is deleted afterwards.
-                    val busy = SelfUpdate.state !is SelfUpdate.State.Idle && SelfUpdate.state !is SelfUpdate.State.Failed
+                    val busy = SelfUpdate.state is SelfUpdate.State.Downloading
                     OutlinedButton(enabled = !busy, onClick = {
                         val apk = latest.apkUrl
                         when {

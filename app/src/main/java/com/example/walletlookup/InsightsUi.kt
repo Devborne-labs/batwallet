@@ -97,7 +97,9 @@ fun SafetyCard(
     val (tint, symbol, title) = when {
         danger -> Triple(red, "!", verdict)
         notActivated -> Triple(amber, "!", tr("Not activated yet"))
-        savedWallet != null -> Triple(MaterialTheme.colorScheme.onSurfaceVariant, "✓", verdict)
+        // Your own wallet or contact: green once the checks found nothing wrong (grey while checking).
+        savedWallet != null -> if (safety != null && safety.level != Level.BAD) Triple(InGreen, "✓", verdict)
+            else Triple(MaterialTheme.colorScheme.onSurfaceVariant, "✓", verdict)
         // Grey, not green: a network didn't answer, so the all-clear would only cover part of the address.
         partial -> Triple(MaterialTheme.colorScheme.onSurfaceVariant, "?", tr("Couldn't fully check"))
         safety == null -> Triple(MaterialTheme.colorScheme.onSurfaceVariant, "…", verdict)

@@ -52,14 +52,38 @@ object SelfUpdate {
     private var job: Job? = null
 
     /** Starts downloading and installing [url]; does nothing while an update is already running. */
+    /**
+     * Android's "Update this app?" screen, waiting to be shown. The installer reports in the background, where newer
+     * Android versions (OnePlus especially) don't let apps open screens, so the visible update dialog opens it.
+     */
+    var confirm by mutableStateOf<Intent?>(null)
+    /** The last confirm screen, so the dialog's Install button can open it again if it was closed. */
+    var lastConfirm: Intent? = null
+
+    /** Starts downloading and installing [url]; does nothing while a download is running (an install can be retried). */
     fun start(context: Context, url: String, newVersion: String) {
-        if (state is State.Downloading || state is State.Installing) return
+        if (state is State.Downloading) return
+        job?.cancel()
         version = newVersion
+        confirm = null
+        lastConfirm = null
         state = State.Downloading(0, 0)
         val app = context.applicationContext
         job = scope.launch {
-            val error = downloadAndInstall(app, url)
-            state = if (error == null) State.Installing else State.Failed(error)
+            // One retry: a dropped mobile connection shouldn't end the update.
+            var error = downloadAndInstall(app, url)
+            if (error != null && error != "Not a Batwallet release" && !error.startsWith("This APK") && error != "You already have this version") {
+                withContext(Dispatchers.Main) { state = State.Downloading(0, 0) }
+                error = downloadAndInstall(app, url)
+            }
+            withContext(Dispatchers.Main) { state = if (error == null) State.Installing else State.Failed(error) }
+            // The installer normally answers in seconds; if it never does, don't leave the dialog stuck.
+            if (error == null) {
+                kotlinx.coroutines.delay(120_000)
+                withContext(Dispatchers.Main) {
+                    if (state is State.Installing) state = State.Failed("The installer didn't answer. Tap Update to try again.")
+                }
+            }
         }
     }
 
@@ -81,6 +105,7 @@ object SelfUpdate {
     /** Removes a download left over from an update that was interrupted. */
     fun cleanUp(context: Context) {
         File(context.cacheDir, FILE).delete()
+        context.getExternalFilesDir(null)?.let { File(it, FILE).delete() }
     }
 
     /** Only APKs attached to Batwallet's own releases are ever downloaded. */
@@ -90,9 +115,9 @@ object SelfUpdate {
     private suspend fun downloadAndInstall(context: Context, url: String): String? =
         withContext(Dispatchers.IO) {
             if (!trusted(url)) return@withContext "Not a Batwallet release"
-            val file = File(context.cacheDir, FILE)
+            val file = File(context.getExternalFilesDir(null) ?: context.cacheDir, FILE)
             try {
-                download(url, file)
+                download(context, url, file)
                 ensureActive()
                 check(context, file)?.let { return@withContext it }
                 install(context, file)
@@ -109,36 +134,44 @@ object SelfUpdate {
             }
         }
 
-    private suspend fun download(url: String, file: File) {
-        val c = URL(url).openConnection() as HttpURLConnection // GitHub redirects to its download host (https → https)
-        c.connectTimeout = 15_000
-        c.readTimeout = 30_000
-        c.setRequestProperty("User-Agent", "Batwallet/1.0")
+    /**
+     * Downloads with Android's own downloader: it follows GitHub's redirect to its download servers, retries and
+     * resumes when the connection drops, keeps going if you leave the app, and shows its progress as a notification.
+     * The file goes to the app's own folder (no storage permission) and is deleted after installing.
+     */
+    private suspend fun download(context: Context, url: String, file: File) {
+        val dm = context.getSystemService(android.app.DownloadManager::class.java)
+        file.delete()
+        val id = dm.enqueue(
+            android.app.DownloadManager.Request(Uri.parse(url))
+                .setTitle("Batwallet $version")
+                .setNotificationVisibility(android.app.DownloadManager.Request.VISIBILITY_VISIBLE)
+                .setDestinationInExternalFilesDir(context, null, file.name)
+        )
         try {
-            if (c.responseCode !in 200..299) throw IOException("HTTP ${c.responseCode}")
-            val total = c.contentLengthLong // -1 when the server doesn't say: the dialog then shows a moving bar
-            var done = 0L
-            var shown = 0L
-            c.inputStream.use { input ->
-                file.outputStream().use { out ->
-                    val buf = ByteArray(64 * 1024)
-                    while (true) {
-                        kotlin.coroutines.coroutineContext.ensureActive() // Cancel stops the download
-                        val n = input.read(buf)
-                        if (n < 0) break
-                        out.write(buf, 0, n)
-                        done += n
-                        // About every 100 KB is plenty for a smooth bar, without redrawing for every block.
-                        if (done - shown >= 100_000) {
-                            shown = done
-                            withContext(Dispatchers.Main) { state = State.Downloading(done, total) }
+            while (true) {
+                kotlin.coroutines.coroutineContext.ensureActive() // Cancel stops the download (removed below)
+                val q = dm.query(android.app.DownloadManager.Query().setFilterById(id))
+                    ?: throw IOException("Download stopped")
+                q.use { c ->
+                    if (!c.moveToFirst()) throw IOException("Download stopped")
+                    val status = c.getInt(c.getColumnIndexOrThrow(android.app.DownloadManager.COLUMN_STATUS))
+                    val done = c.getLong(c.getColumnIndexOrThrow(android.app.DownloadManager.COLUMN_BYTES_DOWNLOADED_SO_FAR))
+                    val total = c.getLong(c.getColumnIndexOrThrow(android.app.DownloadManager.COLUMN_TOTAL_SIZE_BYTES))
+                    withContext(Dispatchers.Main) { state = State.Downloading(maxOf(0L, done), total) }
+                    when (status) {
+                        android.app.DownloadManager.STATUS_SUCCESSFUL -> return
+                        android.app.DownloadManager.STATUS_FAILED -> {
+                            val reason = c.getInt(c.getColumnIndexOrThrow(android.app.DownloadManager.COLUMN_REASON))
+                            throw IOException(if (reason == android.app.DownloadManager.ERROR_INSUFFICIENT_SPACE) "Not enough storage" else "Download failed ($reason)")
                         }
                     }
                 }
+                kotlinx.coroutines.delay(400)
             }
-            withContext(Dispatchers.Main) { state = State.Downloading(done, if (total > 0) total else done) }
-        } finally {
-            c.disconnect()
+        } catch (e: Exception) {
+            dm.remove(id)
+            throw e
         }
     }
 
@@ -186,9 +219,10 @@ class InstallReceiver : BroadcastReceiver() {
     override fun onReceive(context: Context, intent: Intent) {
         when (intent.getIntExtra(PackageInstaller.EXTRA_STATUS, PackageInstaller.STATUS_FAILURE)) {
             PackageInstaller.STATUS_PENDING_USER_ACTION -> {
-                val confirm = if (Build.VERSION.SDK_INT >= 33) intent.getParcelableExtra(Intent.EXTRA_INTENT, Intent::class.java)
+                val screen = if (Build.VERSION.SDK_INT >= 33) intent.getParcelableExtra(Intent.EXTRA_INTENT, Intent::class.java)
                 else @Suppress("DEPRECATION") intent.getParcelableExtra<Intent>(Intent.EXTRA_INTENT)
-                confirm?.let { runCatching { context.startActivity(it.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)) } }
+                // Handed to the visible update dialog to open (opening it from here is often blocked).
+                screen?.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)?.let { SelfUpdate.lastConfirm = it; SelfUpdate.confirm = it }
             }
             PackageInstaller.STATUS_SUCCESS -> SelfUpdate.state = SelfUpdate.State.Idle
             PackageInstaller.STATUS_FAILURE_ABORTED -> SelfUpdate.state = SelfUpdate.State.Idle // you tapped Cancel

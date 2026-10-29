@@ -92,6 +92,15 @@ private fun mb(bytes: Long) = String.format(Locale.US, "%.1f MB", bytes / 1_000_
 @Composable
 fun UpdateProgressDialog() {
     val st = SelfUpdate.state
+    val context = androidx.compose.ui.platform.LocalContext.current
+    // Android's "Update?" screen, from the installer: open it from here, while the app is on screen.
+    val confirm = SelfUpdate.confirm
+    androidx.compose.runtime.LaunchedEffect(confirm) {
+        if (confirm != null) {
+            runCatching { context.startActivity(confirm) }
+            SelfUpdate.confirm = null
+        }
+    }
     if (st == SelfUpdate.State.Idle) return
     AlertDialog(
         onDismissRequest = {},
@@ -121,6 +130,11 @@ fun UpdateProgressDialog() {
         confirmButton = {
             when (st) {
                 is SelfUpdate.State.Downloading -> TextButton(onClick = { SelfUpdate.cancel() }) { Text("Cancel") }
+                // Closed Android's confirm screen by mistake? Open it again.
+                SelfUpdate.State.Installing -> Row {
+                    SelfUpdate.lastConfirm?.let { c -> TextButton(onClick = { runCatching { context.startActivity(c) } }) { Text("Install") } }
+                    TextButton(onClick = { SelfUpdate.state = SelfUpdate.State.Idle }) { Text("Close") }
+                }
                 else -> TextButton(onClick = { SelfUpdate.state = SelfUpdate.State.Idle }) { Text("Close") }
             }
         },

@@ -124,6 +124,20 @@ class Store(context: Context) {
         }
     }.getOrDefault(emptyList())
 
+    /** The last safety check of an address and when it ran (re-checked every few hours, not on every open). */
+    fun saveSafety(address: String, safety: Safety) {
+        val arr = JSONArray()
+        safety.checks.forEach { arr.put(JSONObject().put("level", it.level.name).put("title", it.title).put("detail", it.detail)) }
+        prefs.edit().putString("safety:" + address.lowercase(), JSONObject().put("t", System.currentTimeMillis()).put("checks", arr).toString()).apply()
+    }
+
+    fun loadSafety(address: String): Pair<Long, Safety>? = runCatching {
+        val o = JSONObject(prefs.getString("safety:" + address.lowercase(), null) ?: return null)
+        val arr = o.getJSONArray("checks")
+        o.getLong("t") to Safety((0 until arr.length()).map { arr.getJSONObject(it) }
+            .map { Check(Level.valueOf(it.getString("level")), it.getString("title"), it.getString("detail")) })
+    }.getOrNull()
+
     /** Daily summary notification at about 9 AM. */
     var dailySummary: Boolean
         get() = prefs.getBoolean("daily_summary", false)
