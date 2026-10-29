@@ -57,6 +57,8 @@ object SelfUpdate {
      * Android versions (OnePlus especially) don't let apps open screens, so the visible update dialog opens it.
      */
     var confirm by mutableStateOf<Intent?>(null)
+    /** Which download try this is (1–5), shown in the dialog when it's past the first. */
+    var attempt by mutableStateOf(1)
     /** The last confirm screen, so the dialog's Install button can open it again if it was closed. */
     var lastConfirm: Intent? = null
 
@@ -70,11 +72,14 @@ object SelfUpdate {
         state = State.Downloading(0, 0)
         val app = context.applicationContext
         job = scope.launch {
-            // One retry: a dropped mobile connection shouldn't end the update.
-            var error = downloadAndInstall(app, url)
-            if (error != null && error != "Not a Batwallet release" && !error.startsWith("This APK") && error != "You already have this version") {
-                withContext(Dispatchers.Main) { state = State.Downloading(0, 0) }
+            // Up to 5 tries: GitHub's download server can hang or drop on some mobile networks (a stalled try is
+            // restarted after 20 seconds without data). Problems with the file itself aren't retried.
+            var error: String? = null
+            for (n in 1..5) {
+                withContext(Dispatchers.Main) { attempt = n; state = State.Downloading(0, 0) }
                 error = downloadAndInstall(app, url)
+                if (error == null || error == "Not a Batwallet release" || error.startsWith("This APK") ||
+                    error == "You already have this version" || error == "Not enough storage") break
             }
             withContext(Dispatchers.Main) { state = if (error == null) State.Installing else State.Failed(error) }
             // The installer normally answers in seconds; if it never does, don't leave the dialog stuck.
@@ -148,6 +153,8 @@ object SelfUpdate {
                 .setNotificationVisibility(android.app.DownloadManager.Request.VISIBILITY_VISIBLE)
                 .setDestinationInExternalFilesDir(context, null, file.name)
         )
+        var lastBytes = -1L
+        var lastChange = System.currentTimeMillis()
         try {
             while (true) {
                 kotlin.coroutines.coroutineContext.ensureActive() // Cancel stops the download (removed below)
@@ -159,6 +166,11 @@ object SelfUpdate {
                     val done = c.getLong(c.getColumnIndexOrThrow(android.app.DownloadManager.COLUMN_BYTES_DOWNLOADED_SO_FAR))
                     val total = c.getLong(c.getColumnIndexOrThrow(android.app.DownloadManager.COLUMN_TOTAL_SIZE_BYTES))
                     withContext(Dispatchers.Main) { state = State.Downloading(maxOf(0L, done), total) }
+                    // No new data for 20 seconds: this try is stuck (it happens with GitHub's server on some
+                    // networks), so give it up and let the next try start fresh.
+                    val now = System.currentTimeMillis()
+                    if (done != lastBytes) { lastBytes = done; lastChange = now }
+                    else if (status != android.app.DownloadManager.STATUS_SUCCESSFUL && now - lastChange > 20_000) throw IOException("Download stalled")
                     when (status) {
                         android.app.DownloadManager.STATUS_SUCCESSFUL -> return
                         android.app.DownloadManager.STATUS_FAILED -> {

@@ -113,7 +113,8 @@ fun UpdateProgressDialog() {
                         if (st.total > 0) LinearProgressIndicator(progress = { st.done.toFloat() / st.total }, modifier = Modifier.fillMaxWidth())
                         else LinearProgressIndicator(Modifier.fillMaxWidth())
                         Text(
-                            tr("Downloading…") + " " + mb(st.done) + (if (st.total > 0) " / " + mb(st.total) else ""),
+                            tr("Downloading…") + " " + mb(st.done) + (if (st.total > 0) " / " + mb(st.total) else "") +
+                                (if (SelfUpdate.attempt > 1) " · " + tr("try") + " ${SelfUpdate.attempt} " + tr("of") + " 5" else ""),
                             style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant,
                         )
                     }
