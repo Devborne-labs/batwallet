@@ -11,8 +11,8 @@ android {
         applicationId = "com.malluwayne.batwallet"
         minSdk = 28
         targetSdk = 36
-        versionCode = 51
-        versionName = "19.2"
+        versionCode = 52
+        versionName = "19.3"
     }
 
     // Release key: kept outside the project (path and password in ~/.gradle/gradle.properties, never in git).
@@ -60,4 +60,8 @@ dependencies {
     // Installs the speed profiles that come with Compose, so a sideloaded APK starts and scrolls like a Play Store one.
     implementation("androidx.profileinstaller:profileinstaller:1.4.1")
     implementation("com.journeyapps:zxing-android-embedded:4.3.0")
+    testImplementation("junit:junit:4.13.2")
 }
+
+// The logic checks (app/src/test) run before every release build, so a broken one stops the release.
+tasks.matching { it.name == "assembleRelease" }.configureEach { dependsOn("testDebugUnitTest") }

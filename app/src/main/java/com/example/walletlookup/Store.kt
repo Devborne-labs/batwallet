@@ -155,11 +155,6 @@ class Store(context: Context) {
         get() = prefs.getBoolean("hide_small", false)
         set(v) = prefs.edit().putBoolean("hide_small", v).apply()
 
-    /** When Home's recent transactions were last collected (epoch millis). */
-    var recentTxAt: Long
-        get() = prefs.getLong("recent_tx_at", 0L)
-        set(v) = prefs.edit().putLong("recent_tx_at", v).apply()
-
 
 
     /** Only notify for USDT changes at least this big (0 = every change, including gas fees). */

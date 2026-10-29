@@ -4,6 +4,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.asContextElement
 import kotlinx.coroutines.withContext
 import org.json.JSONArray
 import org.json.JSONObject
@@ -45,8 +46,12 @@ private const val USDT_TRC20_ADDR = "TR7NHqjeKQxGTCi8q8ZY4pL8otSzgjLj6t"
 private const val USDT_APTOS_META = "0x357b0b74bc833e95a115ad22604854d6b0fca151cecd94111770e5d6ffc9dc2b"
 private const val USDT_TON_MASTER = "EQCxE6mUtQJKFnGfaROTKOt1lZbDiiX1kCixRv7Nw2Id_sDs"
 private const val TRANSFER_TOPIC = "0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef"
-/** How many transfers to fetch per network; "Load more" raises it. */
-@Volatile internal var historyLimit = 25
+/**
+ * How many transfers to fetch per network ("Load more" raises it). Set per request and carried along with it (also
+ * into its parallel parts), so Home's checks and an open History page can't change each other's count.
+ */
+private val historyLimitLocal = ThreadLocal<Int>()
+internal val historyLimit: Int get() = historyLimitLocal.get() ?: 25
 private val LIMIT: Int get() = historyLimit
 
 private data class EvmHist(
@@ -72,10 +77,10 @@ private val EVM_HIST = listOf(
  * Latest stablecoin transfers of an address on each of its networks.
  * [networks] limits EVM lookups to the networks where the wallet actually has activity.
  */
-suspend fun history(raw: String, networks: Set<String>? = null, limit: Int = 25): List<History> {
-    historyLimit = limit
-    return historyRaw(raw, networks).map { h -> h.copy(items = h.items.filterNot(::isDust)) }
-}
+suspend fun history(raw: String, networks: Set<String>? = null, limit: Int = 25): List<History> =
+    withContext(historyLimitLocal.asContextElement(limit)) {
+        historyRaw(raw, networks).map { h -> h.copy(items = h.items.filterNot(::isDust)) }
+    }
 
 /**
  * The transfer(s) behind a balance change the alerts saw without details ([change]: + in, − out). Usually one
@@ -304,7 +309,7 @@ private suspend fun historyRaw(raw: String, networks0: Set<String>?): List<Histo
             }.awaitAll()
         }
         AddrType.TRON -> listOf(safeHistory("Tron") { tronHistory(a) })
-        AddrType.APTOS -> listOf(safeHistory("Aptos") { aptosHistory(a) })
+        AddrType.APTOS -> listOf(safeHistory("Aptos") { aptosCached(a) })
         AddrType.TON -> listOf(safeHistory("TON") { tonHistory(a) })
         else -> coinHistory(type, a) ?: listOf(History(
             type.label, supported = false,
@@ -619,6 +624,23 @@ private fun tronHistory(a: String): History {
 
 private const val APT_COIN = "0x1::aptos_coin::AptosCoin"
 
+/**
+ * Aptos's free indexer allows each phone only a little work per few minutes, and Home now checks every few
+ * minutes: reuse an answer for 2 minutes (same address and limit), and if Aptos refuses, show the last good one.
+ */
+private val aptosAnswers = java.util.concurrent.ConcurrentHashMap<String, Pair<Long, History>>()
+
+private fun aptosCached(a: String): History {
+    val key = "${a.lowercase()}|$LIMIT"
+    val now = System.currentTimeMillis()
+    aptosAnswers[key]?.let { (t, h) -> if (now - t < 120_000) return h }
+    return try {
+        aptosHistory(a).also { aptosAnswers[key] = now to it }
+    } catch (e: Exception) {
+        aptosAnswers[key]?.second ?: throw e
+    }
+}
+
 private fun aptosHistory(raw: String): History {
     val a = "0x" + raw.removePrefix("0x").lowercase().padStart(64, '0')
     // USDT plus APT itself (as the old coin type and as its newer fungible-asset form, 0xa).
@@ -893,7 +915,7 @@ private fun activityCheck(hist: List<History>): Check? {
 }
 
 /** Tron base58 address → 20-byte hex (without the 0x41 prefix). Padded, so odd input can't go out of range. */
-private fun tronHex(address: String): String {
+internal fun tronHex(address: String): String {
     val alphabet = "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz"
     var n = BigInteger.ZERO
     for (c in address) n = n.multiply(BigInteger.valueOf(58)).add(BigInteger.valueOf(alphabet.indexOf(c).coerceAtLeast(0).toLong()))

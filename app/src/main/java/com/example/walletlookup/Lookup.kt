@@ -501,15 +501,6 @@ private fun tronBackup(a: String, p: Map<String, Double>, explorer: String): Cha
         listOf("USDT (TRC20)" to usdt), extra, activity = true)
 }
 
-/** A T… address as the 20-byte hex the Tron node's contract calls want (Base58 decoded, version byte and checksum dropped). */
-private fun tronHex(a: String): String {
-    val alphabet = "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz"
-    var n = BigInteger.ZERO
-    for (c in a) n = n.multiply(BigInteger.valueOf(58)).add(BigInteger.valueOf(alphabet.indexOf(c).toLong()))
-    val bytes = n.toByteArray().let { if (it.size > 25) it.copyOfRange(it.size - 25, it.size) else ByteArray(25 - it.size) + it }
-    return bytes.copyOfRange(1, 21).joinToString("") { "%02x".format(it) }
-}
-
 // ---------- Solana (public RPC) ----------
 
 /**

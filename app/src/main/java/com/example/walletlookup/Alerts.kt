@@ -214,6 +214,8 @@ object Alerts {
     private const val DAY_MS = 24 * 3_600_000L
     private const val WEEK_MS = 7 * DAY_MS
     private val lastFill = HashMap<String, Long>()
+    /** Per wallet: when its current payment notification started, its lines, and how many payments it covers. */
+    private val burst = java.util.concurrent.ConcurrentHashMap<String, Triple<Long, List<String>, Int>>()
     private val searchedAt = java.util.concurrent.ConcurrentHashMap<String, Long>()
 
     /**
@@ -414,10 +416,18 @@ object Alerts {
             // Payments at or above the "big payment" amount use a louder channel and say so.
             val bigMin = store.bigPayment
             val big = bigMin > 0 && worth.any { (k, d) -> k.startsWith("USDT|") && d.abs() >= BigDecimal(bigMin) }
+            // Several payments to one wallet within 2 minutes: one notification, updated, instead of a stack.
+            val nowMs = System.currentTimeMillis()
+            val earlier = burst[w.address]?.takeIf { nowMs - it.first < 120_000L }
+            val lines = (earlier?.second.orEmpty() + text.lines()).takeLast(6)
+            val count = (earlier?.third ?: 0) + text.lines().size
+            burst[w.address] = Triple(nowMs, lines, count)
+            val shownTitle = (if (big) "Big payment · " + title else title) + (if (count > 1) " · $count " + tr("payments") else "")
             notify(
-                context, (System.currentTimeMillis() / 1000).toInt() xor w.address.hashCode(),
-                if (big) "Big payment · " + title else title, text, if (big) BIG_CHANNEL else CHANNEL,
+                context, if (earlier != null) earlier.first.toInt() xor w.address.hashCode() else nowMs.toInt() xor w.address.hashCode(),
+                shownTitle, lines.joinToString("\n"), if (big) BIG_CHANNEL else CHANNEL,
             )
+            if (earlier != null) burst[w.address] = Triple(earlier.first, lines, count) // keep the same notification
         }
     }
 }

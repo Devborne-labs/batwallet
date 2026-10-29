@@ -408,7 +408,7 @@ private fun LockScreen(onUnlock: () -> Unit) {
  * Recent payments, newest first, at most 30. The same payment from history and from an alert is kept once: by
  * transaction ID when both have one, else same wallet, direction, coin and amount within an hour (the history one wins).
  */
-private fun mergeRecent(all: List<Triple<String, String, Transfer>>): List<Triple<String, String, Transfer>> {
+internal fun mergeRecent(all: List<Triple<String, String, Transfer>>): List<Triple<String, String, Transfer>> {
     val unique = mutableListOf<Triple<String, String, Transfer>>()
     for (x in all.sortedByDescending { it.third.txUrl != null }) {
         val t = x.third
@@ -510,12 +510,8 @@ private fun App(
     // Latest transfers across your wallets (shown on Home), and the one opened from there.
     // Up to 30 latest payments across your wallets (Home shows 5; "See all" the rest).
     var recentTx by remember { mutableStateOf(store.loadRecentTx()) }
-    // Goes up after every full refresh, so Home's recent transactions are collected again.
-    var syncRound by remember { mutableIntStateOf(0) }
-    // Pull-to-refresh on Home bumps this to reload recent transactions even if they are fresh.
+    // Pull-to-refresh on Home (and a payment arriving) bumps this to collect recent transactions again.
     var recentForce by remember { mutableIntStateOf(0) }
-    var recentHandled by remember { mutableIntStateOf(0) }
-    var recentCount by remember { mutableIntStateOf(-1) }
     var hideSmall by remember { mutableStateOf(store.hideSmall) }
     var homeTx by remember { mutableStateOf<Pair<String, Transfer>?>(null) }
     // Saved names by address, for history and transaction rows (built once per change, not every frame).
@@ -615,7 +611,6 @@ private fun App(
                 list.forEach { w -> launch { gate.acquire(); try { sync(w.address) } finally { gate.release() } } }
             }
             all(saved.filter { !it.contact && !it.archived })
-            syncRound++
             all(saved.filter { it.contact && !it.archived })
         }
     }
@@ -710,7 +705,6 @@ private fun App(
                     }
                 }
             }
-            store.recentTxAt = System.currentTimeMillis()
         }
     }
 
