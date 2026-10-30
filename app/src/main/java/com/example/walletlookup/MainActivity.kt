@@ -1496,8 +1496,8 @@ private fun HomeTab(
     var showSave by remember { mutableStateOf(false) }
     var showRecent by remember { mutableStateOf(false) }
 
-    // The total card shows "Updating…" itself, so on the overview the pull sign only follows the finger; an opened
-    // address shows it while its own balances load (not while other wallets sync in the background).
+    // The total card shows "Updating…" itself, so on the overview the pull's gap closes again after a moment; an opened
+    // address keeps it open until its own balances have loaded (not while other wallets sync in the background).
     BatPullToRefresh(isRefreshing = detail && loading, onRefresh = onRefresh, modifier = Modifier.fillMaxSize()) {
         LazyColumn(
             modifier = Modifier.fillMaxSize(),

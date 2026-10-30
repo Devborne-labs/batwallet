@@ -401,8 +401,11 @@ fun HistoryScreen(
                     val d = data
                     if (d == null) {
                         item {
-                            if (loading) Text("Loading transfers…")
-                            else {
+                            if (loading) Row(verticalAlignment = Alignment.CenterVertically) {
+                                BatSpinner(size = 18.dp)
+                                Spacer(Modifier.width(12.dp))
+                                Text("Loading transfers…")
+                            } else {
                                 Text("Couldn't load history.")
                                 TextButton(onClick = { reload++ }, contentPadding = PaddingValues(0.dp)) { Text("Retry") }
                             }
@@ -428,6 +431,10 @@ fun HistoryScreen(
                                     val again = h.network in retrying
                                     TextButton(onClick = { retry(h.network) }, enabled = !loading && !again,
                                         contentPadding = PaddingValues(0.dp)) {
+                                        if (again) {
+                                            BatSpinner(size = 14.dp)
+                                            Spacer(Modifier.width(8.dp))
+                                        }
                                         Text(if (again) "Loading…" else "Retry")
                                     }
                                 }
@@ -451,6 +458,10 @@ fun HistoryScreen(
                     if (d != null && d.any { it.canLoadMore } && limit < 200) {
                         item(key = "more") {
                             TextButton(onClick = { limit += 50; reload++ }, enabled = !loading, modifier = Modifier.fillMaxWidth()) {
+                                if (loading) {
+                                    BatSpinner(size = 14.dp)
+                                    Spacer(Modifier.width(8.dp))
+                                }
                                 Text(if (loading) "Loading…" else "Load more")
                             }
                         }

@@ -2,142 +2,109 @@ package com.example.walletlookup
 
 import androidx.compose.animation.core.LinearEasing
 import androidx.compose.animation.core.animateFloat
-import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.infiniteRepeatable
 import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.Canvas
-import androidx.compose.foundation.background
-import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxScope
-import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.Spacer
-import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.pulltorefresh.PullToRefreshBox
 import androidx.compose.material3.pulltorefresh.PullToRefreshState
 import androidx.compose.material3.pulltorefresh.rememberPullToRefreshState
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.clipToBounds
-import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.geometry.Offset
-import androidx.compose.ui.geometry.Size
-import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.StrokeCap
-import androidx.compose.ui.graphics.drawscope.DrawScope
-import androidx.compose.ui.graphics.drawscope.Stroke
-import androidx.compose.ui.graphics.drawscope.rotate
 import androidx.compose.ui.graphics.graphicsLayer
-import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
+import kotlinx.coroutines.delay
+import kotlin.math.PI
+import kotlin.math.floor
+import kotlin.math.sin
 
-/** The ring's line: about a seventh of its size, never thinner than 2 dp. */
-private fun DrawScope.ringStroke(): Float = (size.minDimension * 0.14f).coerceAtLeast(2.dp.toPx())
-
-/** The faint ring a spinner or the pull progress runs on. */
-private fun DrawScope.ringTrack(color: Color, stroke: Float) {
-    val inset = stroke / 2
-    drawArc(color.copy(alpha = 0.18f), 0f, 360f, useCenter = false, topLeft = Offset(inset, inset),
-        size = Size(size.width - stroke, size.height - stroke), style = Stroke(stroke))
-}
+/** How far the list slides down for a pull: the room the dots sit in. */
+private val PullGap = 64.dp
 
 /**
- * Batwallet's loading sign, used for everything that loads: a gold arc with a bright head and a fading tail, turning
- * over a faint ring. [color] defaults to the accent; a card can pass its own (the safety card's state colour).
+ * Three dots in a row across the canvas's width. [level] (0 resting … 1 lit) sets each dot's size, brightness and lift;
+ * it's read while drawing, so an animation driving it only redraws.
  */
 @Composable
-fun BatSpinner(modifier: Modifier = Modifier, size: Dp = 18.dp, color: Color = MaterialTheme.colorScheme.primary) {
-    val turn = rememberInfiniteTransition(label = "spinner")
-    val angle by turn.animateFloat(0f, 360f, infiniteRepeatable(tween(900, easing = LinearEasing)), label = "angle")
-    Canvas(modifier.size(size)) {
-        val stroke = ringStroke()
-        ringTrack(color, stroke)
-        val inset = stroke / 2
-        rotate(angle) {
-            // A sweep gradient starts at 3 o'clock like the arc: the tail fades in from nothing to full gold at the head.
-            drawArc(
-                // It fades out again past the head, so the round cap at the tail (angle 0) isn't drawn as a solid dot.
-                Brush.sweepGradient(
-                    0f to color.copy(alpha = 0f), 0.72f to color, 0.78f to color, 1f to color.copy(alpha = 0f),
-                    center = center,
-                ),
-                startAngle = 0f, sweepAngle = 260f, useCenter = false, topLeft = Offset(inset, inset),
-                size = Size(this.size.width - stroke, this.size.height - stroke), style = Stroke(stroke, cap = StrokeCap.Round),
+private fun Dots(modifier: Modifier, color: Color, level: (Int) -> Float) {
+    Canvas(modifier) {
+        // Each dot is a quarter of the width, with an eighth between them: 2r + r + 2r + r + 2r = 8r.
+        val r = size.width / 8f
+        for (i in 0..2) {
+            val l = level(i).coerceIn(0f, 1f)
+            drawCircle(
+                color.copy(alpha = color.alpha * (0.3f + 0.7f * l)),
+                radius = r * (0.6f + 0.4f * l),
+                center = Offset(r + 3 * r * i, center.y - 0.8f * r * l),
             )
         }
     }
 }
 
-/** How far a pull has gone ([progress] 0…1), as the same ring filling up from the top. */
-@Composable
-private fun PullRing(progress: Float, size: Dp, color: Color = MaterialTheme.colorScheme.primary) {
-    Canvas(Modifier.size(size)) {
-        val stroke = ringStroke()
-        ringTrack(color, stroke)
-        val inset = stroke / 2
-        drawArc(color, -90f, 360f * progress.coerceIn(0f, 1f), useCenter = false, topLeft = Offset(inset, inset),
-            size = Size(this.size.width - stroke, this.size.height - stroke), style = Stroke(stroke, cap = StrokeCap.Round))
-    }
+/** One pass of the wave: each dot rises, brightens and settles in turn, then all three rest for a moment. */
+private fun wave(phase: Float, dot: Int): Float {
+    val t = phase - dot * 0.16f
+    val u = t - floor(t)
+    return if (u < 0.6f) sin(PI.toFloat() * u / 0.6f) else 0f
 }
 
 /**
- * The pull-to-refresh sign: a small pill below the top edge. While pulling it follows the finger and its ring fills
- * ("Pull to update", then "Release to update"); while updating it shows [BatSpinner] and "Updating…".
+ * Batwallet's loading sign, used for everything that loads: three gold dots rippling left to right. [size] is its
+ * width. [color] defaults to the accent; a card can pass its own (the safety card's state colour).
+ */
+@Composable
+fun BatSpinner(modifier: Modifier = Modifier, size: Dp = 18.dp, color: Color = MaterialTheme.colorScheme.primary) {
+    val phase = rememberInfiniteTransition(label = "dots")
+        .animateFloat(0f, 1f, infiniteRepeatable(tween(1100, easing = LinearEasing)), label = "phase")
+    Dots(modifier.size(size), color) { wave(phase.value, it) }
+}
+
+/**
+ * The dots in the gap a pull opens above the list. While pulling they light up one by one (all three: let go to
+ * update); while updating they ripple.
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-private fun BoxScope.BatRefreshIndicator(state: PullToRefreshState, isRefreshing: Boolean) {
-    // 0 hidden … 1 fully shown: it follows the finger while pulling and stays out while it updates.
-    val resting by animateFloatAsState(if (isRefreshing) 1f else 0f, tween(250), label = "refresh")
+private fun BoxScope.PullDots(state: PullToRefreshState, updating: Boolean) {
     val pulled = state.distanceFraction
-    val reveal = maxOf(resting, pulled.coerceIn(0f, 1f))
-    if (reveal <= 0.01f) return
-    // Still "Updating…" while it fades away after the update, rather than flicking to "Pull to update": the pull state
-    // springs back from 1 to 0 over the same moment, and no new pull can start while it does.
-    val updating = isRefreshing || resting > 0.01f
-    val shape = RoundedCornerShape(50)
-    Row(
-        Modifier.align(Alignment.TopCenter)
+    if (pulled <= 0.01f) return
+    Box(
+        Modifier.align(Alignment.TopCenter).fillMaxWidth().height(PullGap)
             .graphicsLayer {
-                translationY = -48.dp.toPx() + reveal * 60.dp.toPx()
-                alpha = reveal
-            }
-            .shadow(8.dp, shape)
-            .clip(shape)
-            .background(MaterialTheme.colorScheme.surfaceContainerHighest)
-            .border(1.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.4f), shape)
-            .padding(horizontal = 14.dp, vertical = 8.dp),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        if (updating) BatSpinner(size = 16.dp) else PullRing(pulled, 16.dp)
-        Spacer(Modifier.width(8.dp))
-        Text(
-            when {
-                updating -> "Updating…"
-                pulled >= 1f -> "Release to update"
-                else -> "Pull to update"
+                // Centred in the part of the gap that's open so far, fading in with it.
+                translationY = (pulled.coerceIn(0f, 1f) - 1f) * PullGap.toPx() / 2
+                alpha = pulled.coerceIn(0f, 1f)
             },
-            style = MaterialTheme.typography.labelLarge, fontWeight = FontWeight.SemiBold,
-            color = MaterialTheme.colorScheme.onSurface,
-        )
+        contentAlignment = Alignment.Center,
+    ) {
+        if (updating) BatSpinner(size = 30.dp)
+        else Dots(Modifier.size(30.dp), MaterialTheme.colorScheme.primary) { pulled * 3 - it }
     }
 }
 
 /**
- * Pull down to refresh, with Batwallet's own sign ([BatRefreshIndicator]) instead of the plain grey circle.
- * [isRefreshing] shows "Updating…" in it; a screen that already shows its own status (Home's total card) passes false
- * and only the pull itself is shown.
+ * Pull down to refresh: the list slides down and Batwallet's dots show in the gap above it ([PullDots]), never on top
+ * of the list. Only a pull opens the gap; background updates show their own dots (in the rows, or Home's total card).
+ * [isRefreshing] keeps the gap open until the update the pull started has finished; a screen that already shows its
+ * own status passes false and the gap closes again after a moment.
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -148,13 +115,33 @@ fun BatPullToRefresh(
     content: @Composable BoxScope.() -> Unit,
 ) {
     val state = rememberPullToRefreshState()
+    var pulled by remember { mutableStateOf(false) }
+    var started by remember { mutableStateOf(false) }
+    LaunchedEffect(pulled, isRefreshing) {
+        if (!pulled) return@LaunchedEffect
+        if (isRefreshing) {
+            started = true
+            return@LaunchedEffect
+        }
+        // Finished; or it never started (nothing to update, or the screen shows its own status): a moment to see it.
+        delay(if (started) 250 else 800)
+        pulled = false
+        started = false
+    }
     PullToRefreshBox(
-        isRefreshing = isRefreshing,
-        onRefresh = onRefresh,
-        modifier = modifier,
+        isRefreshing = pulled,
+        onRefresh = {
+            pulled = true
+            started = false
+            onRefresh()
+        },
+        // Clipped, so the gap and the slid-down list stay inside the list's own area (never over the header or tabs).
+        modifier = modifier.clipToBounds(),
         state = state,
-        // Clipped to the list, so the pill slides out from under its top edge instead of over the header and status bar.
-        indicator = { Box(Modifier.matchParentSize().clipToBounds()) { BatRefreshIndicator(state, isRefreshing) } },
-        content = content,
-    )
+        indicator = { PullDots(state, pulled) },
+    ) {
+        Box(Modifier.fillMaxSize().graphicsLayer { translationY = state.distanceFraction.coerceIn(0f, 1.5f) * PullGap.toPx() }) {
+            content()
+        }
+    }
 }
