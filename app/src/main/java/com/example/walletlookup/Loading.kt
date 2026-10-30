@@ -100,7 +100,8 @@ fun BatSweep(
     val phase = rememberInfiniteTransition(label = "sweep")
         .animateFloat(0f, 1f, infiniteRepeatable(tween(1400, easing = FastOutSlowInEasing)), label = "phase")
     val said = tr(description)
-    Canvas(modifier.semantics { contentDescription = said }) {
+    // Clipped to its own line: the glow enters from past the left end and leaves past the right one.
+    Canvas(modifier.clipToBounds().semantics { contentDescription = said }) {
         // The glow is under half the width, entering from the left edge and leaving past the right one.
         val glow = size.width * 0.4f
         val x = -glow + phase.value * (size.width + glow)
