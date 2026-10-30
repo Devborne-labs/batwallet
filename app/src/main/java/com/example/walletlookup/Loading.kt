@@ -1,5 +1,6 @@
 package com.example.walletlookup
 
+import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.LinearEasing
 import androidx.compose.animation.core.animateFloat
 import androidx.compose.animation.core.infiniteRepeatable
@@ -27,6 +28,8 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Size
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.unit.Dp
@@ -75,6 +78,25 @@ fun BatSpinner(modifier: Modifier = Modifier, size: Dp = 18.dp, color: Color = M
     val phase = rememberInfiniteTransition(label = "dots")
         .animateFloat(0f, 1f, infiniteRepeatable(tween(1100, easing = LinearEasing)), label = "phase")
     Dots(modifier.size(size), color) { wave(phase.value, it) }
+}
+
+/**
+ * A light sweeping along a thin line, left to right: the updating sign along a card's edge (Home's total card), where
+ * it says "updating" without words or a spinner in the corner. It draws nothing at rest: just the moving glow.
+ */
+@Composable
+fun BatSweep(modifier: Modifier = Modifier, color: Color = MaterialTheme.colorScheme.primary) {
+    val phase = rememberInfiniteTransition(label = "sweep")
+        .animateFloat(0f, 1f, infiniteRepeatable(tween(1400, easing = FastOutSlowInEasing)), label = "phase")
+    Canvas(modifier) {
+        // The glow is under half the width, entering from the left edge and leaving past the right one.
+        val glow = size.width * 0.4f
+        val x = -glow + phase.value * (size.width + glow)
+        drawRect(
+            Brush.horizontalGradient(listOf(Color.Transparent, color, Color.Transparent), startX = x, endX = x + glow),
+            topLeft = Offset(x, 0f), size = Size(glow, size.height),
+        )
+    }
 }
 
 /**
