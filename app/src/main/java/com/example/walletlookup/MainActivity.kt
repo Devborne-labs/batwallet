@@ -118,6 +118,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.scale
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color as ComposeColor
 import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalContext
@@ -154,8 +155,14 @@ import androidx.compose.ui.draw.alpha
 
 private const val AUTHENTICATORS = BIOMETRIC_WEAK or DEVICE_CREDENTIAL
 
-// Quiet Batman palette: pure black (OLED) or white with grey accents only — nothing bright.
+// Batman palette: pure black (OLED) or white, a bat-signal gold accent, and a night-sky card for the total.
 private val BatBlack = ComposeColor(0xFF000000)
+/** The accent as it appears on black; on white the theme uses a deeper amber so white text stays readable on it. */
+val BatGold = ComposeColor(0xFFFFC83D)
+private val BatGoldInk = ComposeColor(0xFF1C1300)
+/** The Home total card's gradient (navy to violet), the same in both themes. */
+val HeroStart = ComposeColor(0xFF1B2150)
+val HeroEnd = ComposeColor(0xFF3E1F6E)
 
 /** Inter: the clean, modern sans-serif style used by wallets like Trust Wallet. */
 private val Inter = FontFamily(
@@ -177,32 +184,32 @@ private val BatType = Typography().run {
 }
 
 private val DarkBat: ColorScheme = darkColorScheme(
-    primary = ComposeColor(0xFFCFCFCF), onPrimary = BatBlack,
-    primaryContainer = ComposeColor(0xFF1E1E1E), onPrimaryContainer = ComposeColor(0xFFE6E6E6),
+    primary = BatGold, onPrimary = BatGoldInk,
+    primaryContainer = ComposeColor(0xFF3D2E00), onPrimaryContainer = ComposeColor(0xFFFFE6A6),
     secondary = ComposeColor(0xFFF2F2F2), onSecondary = BatBlack,
-    tertiary = ComposeColor(0xFF9E9E9E),
+    tertiary = ComposeColor(0xFF7FD6C8),
     background = BatBlack, onBackground = ComposeColor(0xFFEDEDED),
     surface = BatBlack, onSurface = ComposeColor(0xFFEDEDED),
     surfaceContainerLowest = BatBlack, surfaceContainerLow = ComposeColor(0xFF080808),
     surfaceContainer = ComposeColor(0xFF0A0A0A), surfaceContainerHigh = ComposeColor(0xFF121212),
     surfaceContainerHighest = ComposeColor(0xFF141414),
     surfaceVariant = ComposeColor(0xFF1C1C1C), onSurfaceVariant = ComposeColor(0xFF9A9A9A),
-    secondaryContainer = ComposeColor(0xFF1A1A1A), onSecondaryContainer = ComposeColor(0xFFE6E6E6),
+    secondaryContainer = ComposeColor(0xFF3D2E00), onSecondaryContainer = ComposeColor(0xFFFFE6A6),
     outline = ComposeColor(0xFF333333), outlineVariant = ComposeColor(0xFF222222),
     error = ComposeColor(0xFFD9796F),
 )
 private val LightBat: ColorScheme = lightColorScheme(
-    primary = ComposeColor(0xFF3A3A3A), onPrimary = ComposeColor.White,
-    primaryContainer = ComposeColor(0xFFEDEDED), onPrimaryContainer = ComposeColor(0xFF1A1A1A),
+    primary = ComposeColor(0xFF8F5C00), onPrimary = ComposeColor.White,
+    primaryContainer = ComposeColor(0xFFFFE9B5), onPrimaryContainer = ComposeColor(0xFF3B2600),
     secondary = ComposeColor(0xFF111111), onSecondary = ComposeColor.White,
-    tertiary = ComposeColor(0xFF6B6B6B),
+    tertiary = ComposeColor(0xFF007A6E),
     background = ComposeColor.White, onBackground = ComposeColor(0xFF111111),
     surface = ComposeColor.White, onSurface = ComposeColor(0xFF111111),
     surfaceContainerLowest = ComposeColor.White, surfaceContainerLow = ComposeColor(0xFFFAFAFA),
     surfaceContainer = ComposeColor(0xFFF5F5F5), surfaceContainerHigh = ComposeColor(0xFFF1F1F1),
     surfaceContainerHighest = ComposeColor(0xFFEFEFEF),
     surfaceVariant = ComposeColor(0xFFEBEBEB), onSurfaceVariant = ComposeColor(0xFF616161),
-    secondaryContainer = ComposeColor(0xFFF2F2F2), onSecondaryContainer = ComposeColor(0xFF111111),
+    secondaryContainer = ComposeColor(0xFFFFF1CC), onSecondaryContainer = ComposeColor(0xFF3B2600),
     error = ComposeColor(0xFFB3483D),
 )
 
@@ -1305,7 +1312,7 @@ private fun HomeTab(
                     // Long-press: always opens recent checks and the tools (check a transaction, compare addresses).
                     Row(
                         Modifier.weight(1f).height(52.dp).clip(RoundedCornerShape(26.dp))
-                            .background(MaterialTheme.colorScheme.surfaceVariant)
+                            .background(BatGold)
                             .combinedClickable(
                                 onClick = { if (!onPaste(clipboard.getText()?.text.orEmpty())) showRecent = true },
                                 onLongClick = { showRecent = true },
@@ -1313,9 +1320,9 @@ private fun HomeTab(
                         horizontalArrangement = Arrangement.Center,
                         verticalAlignment = Alignment.CenterVertically,
                     ) {
-                        Icon(Icons.Filled.Search, contentDescription = null, modifier = Modifier.size(20.dp))
+                        Icon(Icons.Filled.Search, contentDescription = null, modifier = Modifier.size(20.dp), tint = BatGoldInk)
                         Spacer(Modifier.width(8.dp))
-                        Text("Paste & check", style = MaterialTheme.typography.labelLarge)
+                        Text("Paste & check", style = MaterialTheme.typography.labelLarge, fontWeight = FontWeight.SemiBold, color = BatGoldInk)
                     }
                     OutlinedButton(onClick = onScan, modifier = Modifier.height(52.dp)) { Text("Scan") }
                 }
@@ -1491,24 +1498,43 @@ private fun TotalHeader(
     val statusAlpha by animateFloatAsState(if (busy || justUpdated) 1f else 0f, tween(400), label = "status")
     val known = saved.mapNotNull { cache[it.address] }
     val usd = known.mapNotNull { it.totals.usd }.fold(BigDecimal.ZERO, BigDecimal::add)
-    Column(
-        Modifier.fillMaxWidth().clip(RoundedCornerShape(12.dp)).clickable(onClick = onToggleHidden).padding(vertical = 4.dp),
+    // A night-sky card: the total in white, today's change as a green or red pill.
+    Box(
+        Modifier.fillMaxWidth().clip(RoundedCornerShape(22.dp))
+            .background(Brush.linearGradient(listOf(HeroStart, HeroEnd)))
+            .clickable(onClick = onToggleHidden).padding(horizontal = 20.dp, vertical = 18.dp),
     ) {
-        Text("Total", style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.onSurfaceVariant)
-        Text(
-            if (saved.isEmpty()) money(BigDecimal.ZERO) else if (known.isEmpty()) "…" else hideable(money(usd)),
-            style = MaterialTheme.typography.displaySmall,
-            fontWeight = FontWeight.SemiBold,
-        )
-        change?.takeIf { known.isNotEmpty() }?.let { ch ->
-            val sign = if (ch.usd.signum() >= 0) "+" else "−"
-            val pct = String.format(Locale.US, "%.2f", kotlin.math.abs(ch.percent))
+        Column {
+            Text("Total", style = MaterialTheme.typography.labelLarge, color = ComposeColor.White.copy(alpha = 0.72f))
             Text(
-                hideable("$sign${money(ch.usd.abs())} ($sign$pct%)") + " " + tr("today"),
-                style = MaterialTheme.typography.labelLarge,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                if (saved.isEmpty()) money(BigDecimal.ZERO) else if (known.isEmpty()) "…" else hideable(money(usd)),
+                style = MaterialTheme.typography.displaySmall,
+                fontWeight = FontWeight.SemiBold,
+                color = ComposeColor.White,
             )
+            change?.takeIf { known.isNotEmpty() }?.let { ch ->
+                val up = ch.usd.signum() >= 0
+                val sign = if (up) "+" else "−"
+                val pct = String.format(Locale.US, "%.2f", kotlin.math.abs(ch.percent))
+                Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(top = 8.dp)) {
+                    Text(
+                        hideable("$sign${money(ch.usd.abs())} ($sign$pct%)"),
+                        style = MaterialTheme.typography.labelLarge, fontWeight = FontWeight.SemiBold,
+                        color = if (up) ComposeColor(0xFF7BE3B2) else ComposeColor(0xFFFF8A9A),
+                        modifier = Modifier.clip(RoundedCornerShape(50)).background(ComposeColor.White.copy(alpha = 0.12f))
+                            .padding(horizontal = 10.dp, vertical = 4.dp),
+                    )
+                    Spacer(Modifier.width(8.dp))
+                    Text(tr("today"), style = MaterialTheme.typography.labelLarge, color = ComposeColor.White.copy(alpha = 0.72f))
+                }
+            }
         }
+        // Top right: "Updating…" while balances load, "Updated just now" for a moment after.
+        Text(
+            if (busy) tr("Updating…") else tr("Updated just now"),
+            style = MaterialTheme.typography.labelSmall, color = ComposeColor.White.copy(alpha = 0.72f),
+            modifier = Modifier.align(Alignment.TopEnd).alpha(statusAlpha),
+        )
     }
 }
 
@@ -1731,7 +1757,7 @@ private fun WalletsTab(
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Column(Modifier.weight(1f).clip(RoundedCornerShape(10.dp)).clickable(onClick = onToggleHidden)) {
                         Text(if (showContacts) "Contacts" else "Total balance", style = MaterialTheme.typography.labelLarge,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant)
+                            fontWeight = FontWeight.SemiBold, color = MaterialTheme.colorScheme.primary)
                         Text(hideable(money(usd(current.shown.filter { !it.archived }))), style = MaterialTheme.typography.headlineMedium,
                             fontWeight = FontWeight.Bold)
                     }
@@ -1840,11 +1866,17 @@ private fun WalletsTab(
                                         .padding(top = 18.dp, bottom = 6.dp, end = 8.dp),
                                     verticalAlignment = Alignment.CenterVertically,
                                 ) {
+                                    Text(if (isCollapsed) "▸" else "▾", style = MaterialTheme.typography.labelLarge,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                    Spacer(Modifier.width(8.dp))
+                                    // A dot in the folder's colour: the exchange's or wallet app's brand colour, else its own.
+                                    Box(Modifier.size(10.dp).clip(androidx.compose.foundation.shape.CircleShape).background(folderColor(group)))
+                                    Spacer(Modifier.width(8.dp))
                                     Text(
-                                        (if (isCollapsed) "▸  " else "▾  ") + group.ifBlank { tr("Other") },
+                                        group.ifBlank { tr("Other") },
                                         style = MaterialTheme.typography.labelLarge,
                                         fontWeight = FontWeight.SemiBold,
-                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                        color = MaterialTheme.colorScheme.onSurface,
                                         modifier = Modifier.weight(1f),
                                     )
                                     Text(if (wallets.isNotEmpty() && wallets.all { it.onExchange }) "Exchange" else hideable(money(usd(wallets.filter { !it.archived }))), style = MaterialTheme.typography.labelLarge,
@@ -2066,7 +2098,7 @@ private fun UnderlineTab(label: String, selected: Boolean, modifier: Modifier, o
             fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal,
             color = if (selected) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.onSurfaceVariant,
             modifier = Modifier.padding(vertical = 12.dp))
-        Box(Modifier.width(48.dp).height(2.dp).background(if (selected) MaterialTheme.colorScheme.onSurface else ComposeColor.Transparent))
+        Box(Modifier.width(48.dp).height(2.dp).background(if (selected) MaterialTheme.colorScheme.primary else ComposeColor.Transparent))
     }
 }
 
@@ -2728,20 +2760,27 @@ private fun SettingGroup(title: String, summary: String, expanded: Boolean, onTo
         Modifier.fillMaxWidth().clickable(onClick = onToggle).padding(horizontal = 16.dp, vertical = 13.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
+        // Each row's icon in its own colour (as a phone's Settings does), on a light tint of the same colour.
+        val tint = when (title) {
+            "Appearance" -> ComposeColor(0xFF8B7CFF); "Language" -> ComposeColor(0xFF3B8BF6); "Currency" -> ComposeColor(0xFF2EBD85)
+            "Notifications" -> ComposeColor(0xFFF5A623); "Security" -> ComposeColor(0xFFF6465D); "Backup" -> ComposeColor(0xFF19B5A5)
+            "Etherscan API key" -> ComposeColor(0xFF6C8CFF); "Updates" -> MaterialTheme.colorScheme.primary
+            else -> ComposeColor(0xFFF97316)
+        }
         Box(
-            Modifier.size(36.dp).clip(RoundedCornerShape(10.dp)).background(MaterialTheme.colorScheme.surfaceVariant),
+            Modifier.size(36.dp).clip(RoundedCornerShape(10.dp)).background(tint.copy(alpha = 0.18f)),
             contentAlignment = Alignment.Center,
         ) {
             when (title) {
-                "Notifications" -> Icon(Icons.Filled.Notifications, null, Modifier.size(20.dp))
-                "Security" -> Icon(Icons.Filled.Lock, null, Modifier.size(20.dp))
-                "Backup" -> Icon(Icons.Filled.Share, null, Modifier.size(20.dp))
-                "Etherscan API key" -> Icon(Icons.Filled.Build, null, Modifier.size(20.dp))
-                "Report a problem" -> Icon(Icons.Filled.Info, null, Modifier.size(20.dp))
-                "Updates" -> Icon(Icons.Filled.Refresh, null, Modifier.size(20.dp))
+                "Notifications" -> Icon(Icons.Filled.Notifications, null, Modifier.size(20.dp), tint = tint)
+                "Security" -> Icon(Icons.Filled.Lock, null, Modifier.size(20.dp), tint = tint)
+                "Backup" -> Icon(Icons.Filled.Share, null, Modifier.size(20.dp), tint = tint)
+                "Etherscan API key" -> Icon(Icons.Filled.Build, null, Modifier.size(20.dp), tint = tint)
+                "Report a problem" -> Icon(Icons.Filled.Info, null, Modifier.size(20.dp), tint = tint)
+                "Updates" -> Icon(Icons.Filled.Refresh, null, Modifier.size(20.dp), tint = tint)
                 else -> Text(
                     when (title) { "Appearance" -> "◐"; "Language" -> "Aa"; "Currency" -> "$"; else -> "↗" },
-                    style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.SemiBold,
+                    style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.SemiBold, color = tint,
                     fontSize = if (title == "Appearance") androidx.compose.ui.unit.TextUnit(20f, androidx.compose.ui.unit.TextUnitType.Sp) else androidx.compose.ui.unit.TextUnit.Unspecified,
                 )
             }

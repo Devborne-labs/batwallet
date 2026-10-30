@@ -64,7 +64,7 @@ private fun SectionHeader(title: String, action: String? = null, onAction: () ->
     Row(Modifier.fillMaxWidth().padding(bottom = 6.dp), verticalAlignment = androidx.compose.ui.Alignment.CenterVertically) {
         Text(title, style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.SemiBold, modifier = Modifier.weight(1f))
         if (action != null) {
-            Text(action, style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.onSurfaceVariant,
+            Text(action, style = MaterialTheme.typography.labelLarge, fontWeight = FontWeight.SemiBold, color = MaterialTheme.colorScheme.primary,
                 modifier = Modifier.clickable(onClick = onAction).padding(4.dp))
         }
     }
@@ -75,15 +75,15 @@ private fun SectionHeader(title: String, action: String? = null, onAction: () ->
 fun BackupBanner(days: Int, onClick: () -> Unit) {
     Row(
         Modifier.fillMaxWidth().padding(top = 4.dp).clip(RoundedCornerShape(14.dp))
-            .background(MaterialTheme.colorScheme.surfaceVariant).clickable(onClick = onClick)
+            .background(MaterialTheme.colorScheme.primaryContainer).clickable(onClick = onClick)
             .padding(horizontal = 16.dp, vertical = 12.dp),
         verticalAlignment = androidx.compose.ui.Alignment.CenterVertically,
     ) {
-        Icon(Icons.Filled.Share, contentDescription = null, modifier = Modifier.size(18.dp))
+        Icon(Icons.Filled.Share, contentDescription = null, modifier = Modifier.size(18.dp), tint = MaterialTheme.colorScheme.primary)
         Spacer(Modifier.width(10.dp))
         Text(
             if (days == 0) tr("No backup yet") else tr("No backup for %d days").replace("%d", days.toString()),
-            style = MaterialTheme.typography.bodyMedium, modifier = Modifier.weight(1f),
+            style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onPrimaryContainer, modifier = Modifier.weight(1f),
         )
         Text("Export", style = MaterialTheme.typography.labelLarge, fontWeight = FontWeight.SemiBold, color = MaterialTheme.colorScheme.primary)
     }

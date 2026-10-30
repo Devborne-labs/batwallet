@@ -147,14 +147,14 @@ fun UpdateProgressDialog() {
 fun UpdateBanner(version: String, onClick: () -> Unit) {
     Row(
         Modifier.fillMaxWidth().padding(top = 4.dp).clip(RoundedCornerShape(14.dp))
-            .background(MaterialTheme.colorScheme.surfaceVariant).clickable(onClick = onClick)
+            .background(MaterialTheme.colorScheme.primaryContainer).clickable(onClick = onClick)
             .padding(horizontal = 16.dp, vertical = 12.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        Icon(Icons.Filled.Refresh, contentDescription = null, modifier = Modifier.size(18.dp))
+        Icon(Icons.Filled.Refresh, contentDescription = null, modifier = Modifier.size(18.dp), tint = MaterialTheme.colorScheme.primary)
         Spacer(Modifier.width(10.dp))
         Text(tr("Version") + " $version " + tr("is available"), style = MaterialTheme.typography.bodyMedium,
-            modifier = Modifier.weight(1f))
+            color = MaterialTheme.colorScheme.onPrimaryContainer, modifier = Modifier.weight(1f))
         Text("Update", style = MaterialTheme.typography.labelLarge, fontWeight = FontWeight.SemiBold,
             color = MaterialTheme.colorScheme.primary)
     }
