@@ -120,13 +120,20 @@ fun BatPullToRefresh(
     val state = rememberPullToRefreshState()
     var pulled by remember { mutableStateOf(false) }
     var started by remember { mutableStateOf(false) }
-    LaunchedEffect(pulled, isRefreshing) {
+    LaunchedEffect(pulled, isRefreshing, ownStatus) {
         if (!pulled) return@LaunchedEffect
+        // Pulled on a screen without its own sign, then switched to one with it (Home: an address, then Back): its
+        // own sign takes over, so the gap closes now instead of staying open, empty, until the update ends.
+        if (ownStatus) {
+            pulled = false
+            started = false
+            return@LaunchedEffect
+        }
         if (isRefreshing) {
             started = true
             return@LaunchedEffect
         }
-        // Finished; or it never started (nothing to update, or the screen shows its own status): a moment to see it.
+        // Finished; or it never started (nothing to update): a moment to see it.
         delay(if (started) 250 else 800)
         pulled = false
         started = false
