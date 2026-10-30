@@ -106,6 +106,42 @@ class LogicTest {
         assertFalse(looksLikeTxHash("0x3f5CE5FBFe3E9af3971dD833D26bA9b5C936f0bE"))
     }
 
+    @Test fun failedRequestsGetAPlainReason() {
+        assertEquals("No internet connection.", failureReason(java.net.UnknownHostException("api.gopluslabs.io")))
+        assertEquals("No internet connection.", failureReason(java.net.ConnectException("refused")))
+        assertEquals("The service took too long to answer.", failureReason(java.net.SocketTimeoutException("Read timed out")))
+        assertEquals("Too many requests. Wait a minute, then retry.",
+            failureReason(java.io.IOException("Rate limited by the API, try again in a minute")))
+        assertEquals("Too many requests. Wait a minute, then retry.", failureReason(java.io.IOException("HTTP 429 slow down")))
+        assertEquals("The service is down right now.", failureReason(java.io.IOException("HTTP 503 <html>Service Unavailable")))
+        assertEquals("The service refused the request.", failureReason(java.io.IOException("HTTP 403 {\"message\":\"forbidden\"}")))
+        assertEquals("Couldn't reach the service.", failureReason(IllegalStateException("anything else")))
+    }
+
+    @Test fun activityCheckSaysWhyItFailed() {
+        // Every history source failed: a failed check carrying the history's reason, without its "pull down" hint.
+        val down = activityCheck(listOf(History("Tron", error = "The service took too long. Pull down to retry.")))!!
+        assertTrue(down.failed)
+        assertEquals(Level.INFO, down.level)
+        assertEquals("The service took too long.", down.detail)
+        // Loaded with nothing in it: a real (not failed) warning.
+        val empty = activityCheck(listOf(History("Tron"), History("BSC", error = "No internet connection.")))!!
+        assertFalse(empty.failed)
+        assertEquals(Level.WARN, empty.level)
+        // No history source at all: no activity check.
+        assertEquals(null, activityCheck(listOf(History("VeChain", supported = false))))
+    }
+
+    @Test fun failedChecksAreListedAndNeverRaiseTheLevelToAWarning() {
+        val s = Safety(listOf(
+            Check(Level.GOOD, "Not on scam lists", "ok"),
+            Check(Level.INFO, "Tether freeze check failed", "No internet connection.", failed = true),
+        ))
+        assertEquals(Level.INFO, s.level)
+        assertEquals(listOf("Tether freeze check failed"), s.failed.map { it.title })
+        assertTrue(Safety(listOf(Check(Level.GOOD, "Active wallet", "ok"))).failed.isEmpty())
+    }
+
     @Test fun versionComparison() {
         assertTrue(isNewerVersion("19.10", "19.9"))
         assertTrue(isNewerVersion("20.0", "19.2"))

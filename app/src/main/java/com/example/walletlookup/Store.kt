@@ -135,7 +135,9 @@ class Store(context: Context) {
     /** The last safety check of an address and when it ran (re-checked every few hours, not on every open). */
     fun saveSafety(address: String, safety: Safety) {
         val arr = JSONArray()
-        safety.checks.forEach { arr.put(JSONObject().put("level", it.level.name).put("title", it.title).put("detail", it.detail)) }
+        safety.checks.forEach {
+            arr.put(JSONObject().put("level", it.level.name).put("title", it.title).put("detail", it.detail).put("failed", it.failed))
+        }
         prefs.edit().putString("safety:" + address.lowercase(), JSONObject().put("t", System.currentTimeMillis()).put("checks", arr).toString()).apply()
     }
 
@@ -143,7 +145,7 @@ class Store(context: Context) {
         val o = JSONObject(prefs.getString("safety:" + address.lowercase(), null) ?: return null)
         val arr = o.getJSONArray("checks")
         o.getLong("t") to Safety((0 until arr.length()).map { arr.getJSONObject(it) }
-            .map { Check(Level.valueOf(it.getString("level")), it.getString("title"), it.getString("detail")) })
+            .map { Check(Level.valueOf(it.getString("level")), it.getString("title"), it.getString("detail"), it.optBoolean("failed")) })
     }.getOrNull()
 
     /** Daily summary notification at about 9 AM. */

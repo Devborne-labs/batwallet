@@ -139,14 +139,12 @@ New or unused address	Новый или неиспользованный адр�
 New or unused address. Double-check before sending.	Новый или неиспользованный адрес. Проверьте перед отправкой.	नया या अप्रयुक्त पता। भेजने से पहले दोबारा जांचें।
 This looks like a new or unused wallet. Double-check every character of the address before sending.	Похоже на новый или неиспользованный кошелёк. Проверьте каждый символ адреса перед отправкой.	यह नया या अप्रयुक्त वॉलेट लगता है। भेजने से पहले पते का हर अक्षर जांचें।
 Active wallet	Активный кошелёк	सक्रिय वॉलेट
-Activity unknown	Активность неизвестна	गतिविधि अज्ञात
 Not on scam lists	Нет в списках мошенников	धोखाधड़ी सूची में नहीं
 Marked as scam	Отмечен как мошенник	धोखाधड़ी के रूप में चिह्नित
 Not marked as scam	Не отмечен как мошенник	धोखाधड़ी के रूप में चिह्नित नहीं
 No reports found in the GoPlus security database.	В базе безопасности GoPlus жалоб не найдено.	GoPlus सुरक्षा डेटाबेस में कोई रिपोर्ट नहीं मिली।
 No scam mark on Tonapi.	В Tonapi нет отметки о мошенничестве.	Tonapi पर धोखाधड़ी का निशान नहीं।
 Tonapi lists this address as a scam. Do not send money to it.	Tonapi отмечает этот адрес как мошеннический. Не отправляйте на него деньги.	Tonapi इस पते को धोखाधड़ी बताता है। इस पर पैसे न भेजें।
-Scam database unavailable	База мошенников недоступна	धोखाधड़ी डेटाबेस उपलब्ध नहीं
 Not frozen by Tether	Не заморожен Tether	Tether ने फ़्रीज़ नहीं किया
 Tether hasn't blacklisted this address.	Tether не заблокировал этот адрес.	Tether ने इस पते को ब्लैकलिस्ट नहीं किया है।
 Tether has blacklisted this address. USDT sent here can't be moved again.	Tether заблокировал этот адрес. Отправленные сюда USDT нельзя будет вывести.	Tether ने इस पते को ब्लैकलिस्ट किया है। यहां भेजे गए USDT फिर नहीं निकाले जा सकते।
@@ -408,7 +406,6 @@ Not activated yet	Ещё не активирован	अभी सक्रि�
 This address has never received or sent anything. Double-check it before sending money.	Этот адрес ещё ничего не получал и не отправлял. Проверьте его перед отправкой денег.	इस पते पर कभी कुछ आया या गया नहीं है। पैसे भेजने से पहले इसे दोबारा जाँचें।
 Platform:	Платформа:	प्लेटफ़ॉर्म:
 Couldn't fully check	Не удалось проверить полностью	पूरी जाँच नहीं हो सकी
-A network didn't answer. Try again in a moment.	Одна из сетей не ответила. Попробуйте чуть позже.	एक नेटवर्क ने जवाब नहीं दिया। थोड़ी देर में फिर कोशिश करें।
 Finding the transaction details	Ищем детали транзакции	लेन-देन का विवरण खोजा जा रहा है
 Payment alerts noticed this from a balance change. Batwallet is matching it to the blockchain; the sender, receiver and transaction ID show up here once found.	Уведомления заметили это по изменению баланса. Batwallet сверяет его с блокчейном; отправитель, получатель и ID транзакции появятся здесь, когда найдутся.	पेमेंट अलर्ट ने इसे बैलेंस बदलने से देखा। Batwallet इसे ब्लॉकचेन से मिला रहा है; भेजने वाला, पाने वाला और लेन-देन ID मिलते ही यहाँ दिखेंगे।
 finding details…	ищем детали…	विवरण खोजा जा रहा है…
@@ -450,3 +447,23 @@ Optional. A free key from etherscan.io gives complete, instant history on BSC, P
 Full crash report copied: paste it into the issue	Полный отчёт о сбое скопирован: вставьте его в issue	पूरी क्रैश रिपोर्ट कॉपी हो गई: इसे issue में पेस्ट करें
 Updating…	Обновление…	अपडेट हो रहा है…
 Updated just now	Только что обновлено	अभी-अभी अपडेट हुआ
+Scam list check failed	Проверка по спискам мошенников не удалась	स्कैम सूची जाँच विफल
+Tether freeze check failed	Проверка заморозки Tether не удалась	Tether फ़्रीज़ जाँच विफल
+Contract check failed	Проверка контракта не удалась	कॉन्ट्रैक्ट जाँच विफल
+Activity check failed	Проверка активности не удалась	गतिविधि जाँच विफल
+The service took too long to answer.	Сервис слишком долго не отвечал.	सेवा ने जवाब देने में बहुत देर लगाई।
+Couldn't make a secure connection.	Не удалось установить защищённое соединение.	सुरक्षित कनेक्शन नहीं बन सका।
+Too many requests. Wait a minute, then retry.	Слишком много запросов. Подождите минуту и повторите.	बहुत ज़्यादा अनुरोध। एक मिनट रुकें, फिर दोबारा कोशिश करें।
+The service is down right now.	Сервис сейчас не работает.	सेवा अभी बंद है।
+The service refused the request.	Сервис отклонил запрос.	सेवा ने अनुरोध अस्वीकार कर दिया।
+The service sent an answer the app couldn't read.	Сервис прислал ответ, который приложение не смогло прочитать.	सेवा ने ऐसा जवाब भेजा जिसे ऐप पढ़ नहीं सका।
+Couldn't reach the service.	Не удалось связаться с сервисом.	सेवा तक नहीं पहुँच सके।
+The service took too long.	Сервис слишком долго не отвечал.	सेवा ने बहुत देर लगाई।
+Couldn't run the safety check	Не удалось выполнить проверку безопасности	सुरक्षा जाँच नहीं चल सकी
+Some checks didn't run	Часть проверок не выполнена	कुछ जाँचें नहीं चलीं
+Safety check didn't run	Проверка безопасности не выполнена	सुरक्षा जाँच नहीं चली
+Some networks didn't answer	Некоторые сети не ответили	कुछ नेटवर्क ने जवाब नहीं दिया
+The balances took too long to load, so the checks couldn't start.	Балансы загружались слишком долго, поэтому проверки не начались.	बैलेंस लोड होने में बहुत देर लगी, इसलिए जाँचें शुरू नहीं हो सकीं।
+The balances didn't load, so the checks couldn't start.	Балансы не загрузились, поэтому проверки не начались.	बैलेंस लोड नहीं हुए, इसलिए जाँचें शुरू नहीं हो सकीं।
+Checking again…	Проверяем снова…	फिर से जाँच रहे हैं…
+No network answered.	Ни одна сеть не ответила.	किसी नेटवर्क ने जवाब नहीं दिया।

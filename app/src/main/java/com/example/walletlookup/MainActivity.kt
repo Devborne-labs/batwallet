@@ -155,14 +155,17 @@ import androidx.compose.ui.draw.alpha
 
 private const val AUTHENTICATORS = BIOMETRIC_WEAK or DEVICE_CREDENTIAL
 
-// Batman palette: pure black (OLED) or white, a bat-signal gold accent, and a night-sky card for the total.
+// Batman palette: pure black (OLED) or white, a bat-signal gold accent, and a quiet slate card for the total.
 private val BatBlack = ComposeColor(0xFF000000)
 /** The accent as it appears on black; on white the theme uses a deeper amber so white text stays readable on it. */
 val BatGold = ComposeColor(0xFFFFC83D)
 private val BatGoldInk = ComposeColor(0xFF1C1300)
-/** The Home total card's gradient (navy to violet), the same in both themes. */
-val HeroStart = ComposeColor(0xFF1B2150)
-val HeroEnd = ComposeColor(0xFF3E1F6E)
+/** The Home total card's gradient: muted slate to a hint of plum, low in colour so it doesn't glare. Same in both themes. */
+val HeroStart = ComposeColor(0xFF1E222C)
+val HeroEnd = ComposeColor(0xFF2A2532)
+/** Today's change on the total card: soft green up, soft rose down. */
+private val HeroUp = ComposeColor(0xFF9CCFB4)
+private val HeroDown = ComposeColor(0xFFE0A4AC)
 
 /** Inter: the clean, modern sans-serif style used by wallets like Trust Wallet. */
 private val Inter = FontFamily(
@@ -185,7 +188,7 @@ private val BatType = Typography().run {
 
 private val DarkBat: ColorScheme = darkColorScheme(
     primary = BatGold, onPrimary = BatGoldInk,
-    primaryContainer = ComposeColor(0xFF3D2E00), onPrimaryContainer = ComposeColor(0xFFFFE6A6),
+    primaryContainer = ComposeColor(0xFF2E2819), onPrimaryContainer = ComposeColor(0xFFEBD6A8),
     secondary = ComposeColor(0xFFF2F2F2), onSecondary = BatBlack,
     tertiary = ComposeColor(0xFF7FD6C8),
     background = BatBlack, onBackground = ComposeColor(0xFFEDEDED),
@@ -194,13 +197,13 @@ private val DarkBat: ColorScheme = darkColorScheme(
     surfaceContainer = ComposeColor(0xFF0A0A0A), surfaceContainerHigh = ComposeColor(0xFF121212),
     surfaceContainerHighest = ComposeColor(0xFF141414),
     surfaceVariant = ComposeColor(0xFF1C1C1C), onSurfaceVariant = ComposeColor(0xFF9A9A9A),
-    secondaryContainer = ComposeColor(0xFF3D2E00), onSecondaryContainer = ComposeColor(0xFFFFE6A6),
+    secondaryContainer = ComposeColor(0xFF2E2819), onSecondaryContainer = ComposeColor(0xFFEBD6A8),
     outline = ComposeColor(0xFF333333), outlineVariant = ComposeColor(0xFF222222),
     error = ComposeColor(0xFFD9796F),
 )
 private val LightBat: ColorScheme = lightColorScheme(
     primary = ComposeColor(0xFF8F5C00), onPrimary = ComposeColor.White,
-    primaryContainer = ComposeColor(0xFFFFE9B5), onPrimaryContainer = ComposeColor(0xFF3B2600),
+    primaryContainer = ComposeColor(0xFFF6EDDA), onPrimaryContainer = ComposeColor(0xFF4A3712),
     secondary = ComposeColor(0xFF111111), onSecondary = ComposeColor.White,
     tertiary = ComposeColor(0xFF007A6E),
     background = ComposeColor.White, onBackground = ComposeColor(0xFF111111),
@@ -209,7 +212,7 @@ private val LightBat: ColorScheme = lightColorScheme(
     surfaceContainer = ComposeColor(0xFFF5F5F5), surfaceContainerHigh = ComposeColor(0xFFF1F1F1),
     surfaceContainerHighest = ComposeColor(0xFFEFEFEF),
     surfaceVariant = ComposeColor(0xFFEBEBEB), onSurfaceVariant = ComposeColor(0xFF616161),
-    secondaryContainer = ComposeColor(0xFFFFF1CC), onSecondaryContainer = ComposeColor(0xFF3B2600),
+    secondaryContainer = ComposeColor(0xFFF6EDDA), onSecondaryContainer = ComposeColor(0xFF4A3712),
     error = ComposeColor(0xFFB3483D),
 )
 
@@ -497,6 +500,9 @@ private fun App(
     var syncJob by remember { mutableStateOf<Job?>(null) }
     var safetyResult by remember { mutableStateOf<Safety?>(null) }
     var safetyLoading by remember { mutableStateOf(false) }
+    // Why the safety check couldn't run at all (shown with a Retry button), and the Retry counter that re-runs it.
+    var safetyError by remember { mutableStateOf<String?>(null) }
+    var safetyRetry by remember { mutableIntStateOf(0) }
     var homeHistory by remember { mutableStateOf<List<History>?>(null) }
     var historyFor by remember { mutableStateOf<String?>(null) }
     var hidden by remember { mutableStateOf(store.hideBalances) }
@@ -857,32 +863,37 @@ private fun App(
 
     // Home: safety check + recent history for the searched address. Runs once per address and waits for the
     // balances (cached or fresh) so history only asks the networks where the wallet is used. It is keyed on the
-    // address alone so a balance refresh finishing can't interrupt it halfway.
-    LaunchedEffect(address) {
+    // address (and Retry) alone so a balance refresh finishing can't interrupt it halfway.
+    LaunchedEffect(address, safetyRetry) {
+        safetyError = null
         if (detect(address) == null) {
             safetyResult = null
             homeHistory = null
             safetyLoading = false
             return@LaunchedEffect
         }
-        // The saved check and history show at once. The check runs again only when it's over 6 hours old; the
-        // history (for the last-5 list) refreshes quietly in the background.
+        // The saved check and history show at once. The check runs again when it's over 6 hours old or a part of it
+        // couldn't run last time; the history (for the last-5 list) refreshes quietly in the background.
         val saved = store.loadSafety(address)
-        val fresh = saved != null && System.currentTimeMillis() - saved.first < 6 * 3_600_000L
+        val fresh = saved != null && saved.second.failed.isEmpty() && System.currentTimeMillis() - saved.first < 6 * 3_600_000L
         safetyResult = saved?.second
         homeHistory = HistoryCache.load(address)
         safetyLoading = !fresh
         try {
-            withTimeoutOrNull(60_000) { snapshotFlow { results.isNotEmpty() || (!loading && message != null) }.first { it } }
+            val ready = withTimeoutOrNull(60_000) { snapshotFlow { results.isNotEmpty() || (!loading && message != null) }.first { it } }
             if (results.isNotEmpty()) {
                 val h = history(address, activeNetworks(results))
                 homeHistory = h
                 HistoryCache.save(address, h)
                 if (!fresh) safety(address, h).let { safetyResult = it; store.saveSafety(address, it) }
+            } else if (!fresh) {
+                safetyError = if (ready == null) "The balances took too long to load, so the checks couldn't start."
+                    else "The balances didn't load, so the checks couldn't start."
             }
         } catch (e: CancellationException) {
             throw e
-        } catch (_: Exception) {
+        } catch (e: Exception) {
+            if (!fresh) safetyError = failureReason(e)
         } finally {
             safetyLoading = false
         }
@@ -1053,6 +1064,12 @@ private fun App(
                     },
                     safety = safetyResult,
                     safetyLoading = safetyLoading,
+                    safetyError = safetyError,
+                    // Balances missing or a network didn't answer: fetch them again too, then re-run the checks.
+                    onRetrySafety = {
+                        if (results.isEmpty() || results.any { it.error != null }) refresh++
+                        safetyRetry++
+                    },
                     onHistory = { historyFor = address },
                     recentOf = { a ->
                         if (a != address) emptyList()
@@ -1251,6 +1268,8 @@ private fun HomeTab(
     onSave: (SavedAddress) -> Unit,
     safety: Safety?,
     safetyLoading: Boolean,
+    safetyError: String? = null,
+    onRetrySafety: () -> Unit = {},
     onHistory: () -> Unit,
     /** This address's latest transfers (network, transfer), newest first, for the list under the safety check. */
     recentOf: (String) -> List<Pair<String, Transfer>> = { emptyList() },
@@ -1312,7 +1331,7 @@ private fun HomeTab(
                     // Long-press: always opens recent checks and the tools (check a transaction, compare addresses).
                     Row(
                         Modifier.weight(1f).height(52.dp).clip(RoundedCornerShape(26.dp))
-                            .background(BatGold)
+                            .background(MaterialTheme.colorScheme.primaryContainer)
                             .combinedClickable(
                                 onClick = { if (!onPaste(clipboard.getText()?.text.orEmpty())) showRecent = true },
                                 onLongClick = { showRecent = true },
@@ -1320,9 +1339,11 @@ private fun HomeTab(
                         horizontalArrangement = Arrangement.Center,
                         verticalAlignment = Alignment.CenterVertically,
                     ) {
-                        Icon(Icons.Filled.Search, contentDescription = null, modifier = Modifier.size(20.dp), tint = BatGoldInk)
+                        Icon(Icons.Filled.Search, contentDescription = null, modifier = Modifier.size(20.dp),
+                            tint = MaterialTheme.colorScheme.onPrimaryContainer)
                         Spacer(Modifier.width(8.dp))
-                        Text("Paste & check", style = MaterialTheme.typography.labelLarge, fontWeight = FontWeight.SemiBold, color = BatGoldInk)
+                        Text("Paste & check", style = MaterialTheme.typography.labelLarge, fontWeight = FontWeight.SemiBold,
+                            color = MaterialTheme.colorScheme.onPrimaryContainer)
                     }
                     OutlinedButton(onClick = onScan, modifier = Modifier.height(52.dp)) { Text("Scan") }
                 }
@@ -1430,8 +1451,12 @@ private fun HomeTab(
             if (!tokens.isNullOrEmpty()) item { OtherTokensCard(tokens) }
             // Not activated: every network answered and none shows a balance or any activity.
             val unused = results.isNotEmpty() && results.all { it.error == null && !it.active }
-            val incomplete = results.any { it.error != null }
-            if (type != null) item { SafetyCard(safety, safetyLoading, twin, savedWallet, platform, unused, incomplete) }
+            // Networks that didn't answer: a clean result would only be partial.
+            val unanswered = results.filter { it.error != null }.map { it.network }
+            if (type != null) item {
+                SafetyCard(safety, safetyLoading, twin, savedWallet, platform, unused, unanswered,
+                    error = safetyError, retrying = loading || safetyLoading, onRetry = onRetrySafety)
+            }
             // This address's last 5 transactions, and a button to its full history.
             val last5 = recentOf(address).take(5)
             if (type != null && last5.isNotEmpty()) item {
@@ -1498,7 +1523,7 @@ private fun TotalHeader(
     val statusAlpha by animateFloatAsState(if (busy || justUpdated) 1f else 0f, tween(400), label = "status")
     val known = saved.mapNotNull { cache[it.address] }
     val usd = known.mapNotNull { it.totals.usd }.fold(BigDecimal.ZERO, BigDecimal::add)
-    // A night-sky card: the total in white, today's change as a green or red pill.
+    // A quiet slate card: the total in white, today's change as a soft green or rose pill.
     Box(
         Modifier.fillMaxWidth().clip(RoundedCornerShape(22.dp))
             .background(Brush.linearGradient(listOf(HeroStart, HeroEnd)))
@@ -1520,8 +1545,8 @@ private fun TotalHeader(
                     Text(
                         hideable("$sign${money(ch.usd.abs())} ($sign$pct%)"),
                         style = MaterialTheme.typography.labelLarge, fontWeight = FontWeight.SemiBold,
-                        color = if (up) ComposeColor(0xFF7BE3B2) else ComposeColor(0xFFFF8A9A),
-                        modifier = Modifier.clip(RoundedCornerShape(50)).background(ComposeColor.White.copy(alpha = 0.12f))
+                        color = if (up) HeroUp else HeroDown,
+                        modifier = Modifier.clip(RoundedCornerShape(50)).background(ComposeColor.White.copy(alpha = 0.08f))
                             .padding(horizontal = 10.dp, vertical = 4.dp),
                     )
                     Spacer(Modifier.width(8.dp))
