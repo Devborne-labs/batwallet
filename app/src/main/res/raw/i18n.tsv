@@ -85,7 +85,6 @@ Loading transfers…	Загрузка переводов…	ट्रांस�
 No transfers found.	Переводов не найдено.	कोई ट्रांसफ़र नहीं मिला।
 No stablecoin transfers found	Переводов стейблкоинов не найдено	कोई स्टेबलकॉइन ट्रांसफ़र नहीं मिला
 No transactions	Нет транзакций	कोई लेन-देन नहीं
-Couldn't load history. Pull down to retry.	Не удалось загрузить историю. Потяните вниз, чтобы повторить.	इतिहास लोड नहीं हुआ। फिर से कोशिश करने के लिए नीचे खींचें।
 Couldn't load right now.	Сейчас не удалось загрузить.	अभी लोड नहीं हो सका।
 Couldn't check right now	Сейчас не удалось проверить	अभी जांच नहीं हो सकी
 Export	Экспорт	एक्सपोर्ट
@@ -412,3 +411,4 @@ Less	Меньше	कम
 min	мин	मिनट
 Tap + to save a wallet or a contact. Put wallets in folders like Binance or Trust Wallet.	Нажмите +, чтобы сохранить кошелёк или контакт. Раскладывайте кошельки по папкам, например Binance или Trust Wallet.	वॉलेट या संपर्क सेव करने के लिए + दबाएं। वॉलेट को Binance या Trust Wallet जैसे फ़ोल्डर में रखें।
 Hold a wallet or folder and drag it to change the order.	Удерживайте кошелёк или папку и перетащите, чтобы изменить порядок.	क्रम बदलने के लिए किसी वॉलेट या फ़ोल्डर को दबाकर रखें और खींचें।
+Couldn't load history.	Не удалось загрузить историю.	हिस्ट्री लोड नहीं हो सकी।

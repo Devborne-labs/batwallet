@@ -64,6 +64,12 @@ object Alerts {
     private val online = Constraints.Builder().setRequiredNetworkType(NetworkType.CONNECTED).build()
     private val checking = Mutex()
     private var checkRuns = 0
+    /** Time for the search for missing details per check run (all wallets together), and from Home. */
+    private const val FILL_BUDGET_MS = 15_000L
+    /** Time for each lookup on an alert's own path (balances, the transfers behind it): it alerts without them. */
+    private const val STEP_BUDGET_MS = 12_000L
+    /** Time to trace one coin transfer through recent blocks (about 20 requests in a row). */
+    private const val COIN_TRACE_BUDGET_MS = 10_000L
 
     /**
      * Start whatever the current settings ask for, and stop the rest. Safe to call any time.
@@ -283,7 +289,7 @@ object Alerts {
      * Also run by the app itself when Home loads.
      */
     suspend fun resolveMissing(context: Context, w: SavedAddress) {
-        kotlinx.coroutines.withTimeoutOrNull(15_000) { fillMissingDetails(Store(context), w) }
+        withRequestBudget(FILL_BUDGET_MS) { fillMissingDetails(Store(context), w) }
     }
 
     private suspend fun fillMissingDetails(store: Store, w: SavedAddress) = filling.withLock { fillMissingDetailsLocked(store, w) }
@@ -336,8 +342,15 @@ object Alerts {
             val found = pickTransfers(near.map { it.second }, s.amount, s.time).ifEmpty {
                 if (now - (searchedAt[key] ?: 0L) >= 10 * 60_000L && searches++ < 3) {
                     searchedAt[key] = now
-                    runCatching { findTransfers(w.address, s.network, s.symbol, s.amount, s.time) }.getOrDefault(emptyList())
-                        .filter { it.hash == null || it.hash !in taken }
+                    // Out of time (the run's budget) stops here, not just this entry's search.
+                    val hits = try {
+                        findTransfers(w.address, s.network, s.symbol, s.amount, s.time)
+                    } catch (e: CancellationException) {
+                        throw e
+                    } catch (_: Exception) {
+                        emptyList()
+                    }
+                    hits.filter { it.hash == null || it.hash !in taken }
                 } else emptyList()
             }
             if (found.isEmpty()) return@flatMap listOf(s)
@@ -369,7 +382,8 @@ object Alerts {
         // (≈10 min in instant mode) to catch money arriving on a new network.
         val full = checkRuns++ % 20 == 0
         // Known exchange wallets (Binance's own, say) move other people's money every few seconds: nothing to alert.
-        for (w in store.loadAddresses().filter { !it.contact && !it.archived && knownPlatform(it.address) == null }) {
+        val wallets = store.loadAddresses().filter { !it.contact && !it.archived && knownPlatform(it.address) == null }
+        for (w in wallets) {
             val used = if (full) null else store.loadCache(w.address)?.results
                 ?.filter { it.active && it.error == null }?.map { it.network }?.toSet()?.ifEmpty { null }
             val fresh = try {
@@ -388,8 +402,6 @@ object Alerts {
             }
             // Keep old values for networks that failed this time, so they don't look like changes later.
             val next = old + fresh
-            // Never let the search for missing details hold up the alert itself.
-            kotlinx.coroutines.withTimeoutOrNull(15_000) { fillMissingDetails(store, w) }
 
             val changes = fresh.mapNotNull { (key, now) ->
                 val before = old[key] ?: return@mapNotNull null
@@ -410,8 +422,8 @@ object Alerts {
                 try {
                     val type = detect(w.address)
                     if (type != null) {
-                        val results = lookup(w.address, type)
-                        if (results.none { it.error != null } && stillSaved(store, w.address)) {
+                        val results = withRequestBudget(STEP_BUDGET_MS) { lookup(w.address, type) }
+                        if (results != null && results.none { it.error != null } && stillSaved(store, w.address)) {
                             store.saveCache(w.address, Cached(results, System.currentTimeMillis()))
                         }
                     }
@@ -426,8 +438,9 @@ object Alerts {
                 // short free BSC window has them). Lets the entry open its full details later. Only the networks that
                 // changed are asked (without them, history looks up every network's balance first).
                 val recent = try {
-                    history(w.address, changes.map { it.first.substringAfter("|") }.toSet(), limit = 10)
-                        .flatMap { h -> h.items.map { h.network to it } }
+                    withRequestBudget(STEP_BUDGET_MS) {
+                        history(w.address, changes.map { it.first.substringAfter("|") }.toSet(), limit = 10)
+                    }.orEmpty().flatMap { h -> h.items.map { h.network to it } }
                 } catch (e: CancellationException) {
                     throw e
                 } catch (_: Exception) {
@@ -450,13 +463,21 @@ object Alerts {
                     key.substringBefore("|") !in ALERT_STABLES && matches[key] == null && key !in parts
                 }.mapNotNull { (key, diff) ->
                     val net = key.substringAfter("|")
-                    kotlinx.coroutines.withTimeoutOrNull(10_000) {
-                        kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) { runCatching { recentCoinTransfer(w.address, net, diff) }.getOrNull() }
+                    withRequestBudget(COIN_TRACE_BUDGET_MS) {
+                        kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+                            try {
+                                recentCoinTransfer(w.address, net, diff)
+                            } catch (e: CancellationException) {
+                                throw e
+                            } catch (_: Exception) {
+                                null
+                            }
+                        }
                     }?.let { key to it }
                 }.toMap()
-                // The coin dropping by a fee-sized amount (under $1) while a stablecoin was sent on the same network is
-                // that send's fee, not a payment of its own: leave it out. A bigger drop, or one a real transfer
-                // explains, is a coin send of its own and is kept.
+                // The coin dropping by a fee-sized amount (within its FEE_CAP) while a stablecoin was sent on the same
+                // network is that send's fee, not a payment of its own: leave it out. A bigger drop, or one a real
+                // transfer explains, is a coin send of its own and is kept.
                 val explained = matches.filterValues { it != null }.keys + parts.keys + coins.keys
                 val fees = feeKeys(changes, explained, ::transferUsd)
                 // Exchange wallets: money leaving is the exchange sweeping it to its own wallets, not a payment of yours,
@@ -535,6 +556,16 @@ object Alerts {
                     store.saveSnapshot(w.address, next)
                 }
             }
+        }
+        // Missing details (sender, transaction ID) are searched for only now, after every wallet was checked and
+        // notified: a slow public node can't hold up any alert. One budget for all of them, so the next check isn't
+        // held up either; each run starts at a different wallet, so none is always the one left without time.
+        val fillUntil = System.currentTimeMillis() + FILL_BUDGET_MS
+        val start = if (wallets.isEmpty()) 0 else checkRuns % wallets.size
+        for (w in wallets.drop(start) + wallets.take(start)) {
+            val left = fillUntil - System.currentTimeMillis()
+            if (left <= 0) break
+            withRequestBudget(left) { fillMissingDetails(store, w) }
         }
     }
 }

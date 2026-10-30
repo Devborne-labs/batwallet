@@ -3,6 +3,7 @@ package com.example.walletlookup
 import android.util.Base64
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.asContextElement
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.coroutineScope
@@ -1075,10 +1076,45 @@ private fun httpError(code: Int, text: String): IOException =
     IOException(if (code == 429) "Rate limited by the API, try again in a minute" else "HTTP $code ${text.take(150)}")
 
 /** Sends a request (POST when [body] is given) and returns the status code and the whole answer, error bodies too. */
+/**
+ * A time budget for a piece of background work: short request timeouts, trimmed to what's left of [deadline] (epoch
+ * millis), and no request starts once it's spent. Carried along with the work, also into the parallel requests it
+ * starts (see [withRequestBudget]). A coroutine time limit alone can't stop a request that is already waiting on a
+ * slow node: the request has to stop itself.
+ */
+internal class RequestBudget(val deadline: Long, val connectMs: Int = 4_000, val readMs: Int = 6_000)
+
+private val requestBudget = ThreadLocal<RequestBudget>()
+
+/**
+ * Connect and read timeouts for the next request: the normal 15 s / 20 s, or inside a [RequestBudget] its short ones,
+ * never past its deadline. Throws "took too long" when the budget is already spent, so a chain of requests (a block
+ * search, a history with several sources) ends there instead of carrying on past its time.
+ */
+internal fun requestTimeouts(now: Long = System.currentTimeMillis()): Pair<Int, Int> {
+    val b = requestBudget.get() ?: return 15_000 to 20_000
+    val left = b.deadline - now
+    if (left <= 0) throw java.net.SocketTimeoutException("Out of time for this search")
+    return minOf(b.connectMs.toLong(), left).toInt() to minOf(b.readMs.toLong(), left).toInt()
+}
+
+/**
+ * Runs [block] within a time budget of [budgetMs]: every request inside it (on any thread it moves to) uses short
+ * timeouts and none runs past the end. Null when the time ran out first.
+ */
+internal suspend fun <T> withRequestBudget(budgetMs: Long, block: suspend () -> T): T? {
+    val budget = RequestBudget(System.currentTimeMillis() + budgetMs)
+    // The extra second lets a request trimmed to the deadline end by itself rather than be abandoned mid-way.
+    return kotlinx.coroutines.withTimeoutOrNull(budgetMs + 1_000) {
+        withContext(requestBudget.asContextElement(budget)) { block() }
+    }
+}
+
 private fun request(url: String, body: String? = null, headers: Map<String, String> = emptyMap()): Pair<Int, String> {
+    val (connectMs, readMs) = requestTimeouts()
     val c = URL(url).openConnection() as HttpURLConnection
-    c.connectTimeout = 15_000
-    c.readTimeout = 20_000
+    c.connectTimeout = connectMs
+    c.readTimeout = readMs
     c.setRequestProperty("Accept", "application/json")
     c.setRequestProperty("User-Agent", "Batwallet/1.0")
     headers.forEach { (k, v) -> c.setRequestProperty(k, v) }
