@@ -313,7 +313,8 @@ object Alerts {
         // Lighter checks: only the networks a wallet actually uses, with a full sweep every 20th run
         // (≈10 min in instant mode) to catch money arriving on a new network.
         val full = checkRuns++ % 20 == 0
-        for (w in store.loadAddresses().filter { !it.contact && !it.archived }) {
+        // Known exchange wallets (Binance's own, say) move other people's money every few seconds: nothing to alert.
+        for (w in store.loadAddresses().filter { !it.contact && !it.archived && knownPlatform(it.address) == null }) {
             val used = if (full) null else store.loadCache(w.address)?.results
                 ?.filter { it.active && it.error == null }?.map { it.network }?.toSet()?.ifEmpty { null }
             val fresh = try {
@@ -405,9 +406,10 @@ object Alerts {
             val exchange = isExchangeWallet(w.address, w.group, w.name)
             val worth = changes.filter { (key, diff) ->
                 key !in fees && (!exchange || diff.signum() > 0) &&
-                    (if (key.startsWith("USDT|")) diff.abs() >= min else min.signum() == 0)
+                    (if (key.substringBefore("|") in STABLES) diff.abs() >= min else min.signum() == 0)
             }
-            if (worth.isEmpty()) continue
+            // Muted wallets: refreshed and logged above, never a notification.
+            if (worth.isEmpty() || w.muted) continue
 
             // A tiny coin change next to a real payment (a fee, or dust) is left out.
             val shown = worth.filter { (key, diff) ->
@@ -428,7 +430,7 @@ object Alerts {
             val balance = store.loadCache(w.address)?.totals?.usd?.let { tr("Balance") + " " + money(it) }
             // Payments at or above the "big payment" amount use a louder channel and say so.
             val bigMin = store.bigPayment
-            val big = bigMin > 0 && worth.any { (k, d) -> k.startsWith("USDT|") && d.abs() >= BigDecimal(bigMin) }
+            val big = bigMin > 0 && worth.any { (k, d) -> k.substringBefore("|") in STABLES && d.abs() >= BigDecimal(bigMin) }
             // Several payments to one wallet within 2 minutes: one notification, updated, instead of a stack.
             val nowMs = System.currentTimeMillis()
             val earlier = burst[w.address]?.takeIf { nowMs - it.first < 120_000L }
@@ -485,8 +487,10 @@ class BalanceWorker(context: Context, params: WorkerParameters) : CoroutineWorke
 
 /** Instant mode: stays running with a small notification; checks every 30 seconds when charging, 5 minutes otherwise. */
 class WatchService : Service() {
-    private companion object {
-        const val WAKE_MS = 5 * 60_000L
+    companion object {
+        private const val WAKE_MS = 5 * 60_000L
+        /** True while the service's 30-second loop runs, so the app doesn't run a second loop on top of it. */
+        @Volatile var running = false
     }
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
@@ -525,6 +529,7 @@ class WatchService : Service() {
                 .apply { setReferenceCounted(false) }
         }
         if (loop == null) {
+            running = true
             loop = scope.launch {
                 while (isActive) {
                     // Instant: every 30 seconds. The wake lock is renewed each round (time-limited, so Android can
@@ -539,6 +544,7 @@ class WatchService : Service() {
     }
 
     override fun onDestroy() {
+        running = false
         scope.cancel()
         wakeLock?.takeIf { it.isHeld }?.release()
         super.onDestroy()

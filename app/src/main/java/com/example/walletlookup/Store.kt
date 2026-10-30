@@ -23,6 +23,8 @@ data class SavedAddress(
     val note: String = "",
     /** Archived wallets are hidden everywhere (totals, alerts, lists) until you show or unarchive them. */
     val archived: Boolean = false,
+    /** Muted wallets are still refreshed and their payments logged, but they never notify. */
+    val muted: Boolean = false,
 )
 
 /** How the Wallets tab orders addresses. CUSTOM is your own order (Move up / Move down). */
@@ -50,7 +52,7 @@ fun parseBackup(json: String): List<SavedAddress> {
         if (address.isEmpty()) null
         else SavedAddress(o.optString("name", address.take(8)), address, o.optString("group", ""),
             o.optBoolean("contact", false), o.optBoolean("pinned", false), o.optString("platform", ""), o.optString("note", ""),
-            o.optBoolean("archived", false))
+            o.optBoolean("archived", false), o.optBoolean("muted", false))
     }.map(::foldered)
 }
 
@@ -74,7 +76,7 @@ class Store(context: Context) {
             val o = arr.getJSONObject(it)
             SavedAddress(o.getString("name"), o.getString("address"), o.optString("group", ""),
                 o.optBoolean("contact", false), o.optBoolean("pinned", false), o.optString("platform", ""), o.optString("note", ""),
-            o.optBoolean("archived", false))
+            o.optBoolean("archived", false), o.optBoolean("muted", false))
         }.map(::foldered)
     }
 
@@ -83,10 +85,16 @@ class Store(context: Context) {
         list.forEach {
             arr.put(JSONObject().put("name", it.name).put("address", it.address).put("group", it.group)
                 .put("contact", it.contact).put("pinned", it.pinned).put("platform", it.platform).put("note", it.note)
-                .put("archived", it.archived))
+                .put("archived", it.archived).put("muted", it.muted))
         }
-        prefs.edit().putString("addresses", arr.toString()).apply()
+        prefs.edit().putString("addresses", arr.toString()).putLong("addresses_changed", System.currentTimeMillis()).apply()
     }
+
+    /** When a backup was last exported, and when the wallet list last changed (for the backup reminder). */
+    var lastBackup: Long
+        get() = prefs.getLong("last_backup", 0L)
+        set(v) = prefs.edit().putLong("last_backup", v).apply()
+    val addressesChangedAt: Long get() = prefs.getLong("addresses_changed", 0L)
 
     var theme: ThemeMode
         get() = runCatching { ThemeMode.valueOf(prefs.getString("theme2", ThemeMode.SYSTEM.name)!!) }.getOrDefault(ThemeMode.SYSTEM)
@@ -189,17 +197,6 @@ class Store(context: Context) {
         set(v) = prefs.edit().putString("currency", v.name).apply()
 
     /** Last known USD → currency rate, so values show instantly offline. */
-    /** USDT became the main currency in 16.3: switch once to it, after that your own choice stays. */
-    /** The Home chart was removed in 17.2: drop the totals it kept recording. */
-    fun dropChartData() {
-        if (prefs.contains("total_points")) prefs.edit().remove("total_points").remove("total_points_set").apply()
-    }
-
-    fun switchToUsdtOnce() {
-        if (prefs.getBoolean("usdt_default_done", false)) return
-        prefs.edit().putString("currency", Fiat.USDT.name).putFloat("currency_rate", 1f).putBoolean("usdt_default_done", true).apply()
-    }
-
     var currencyRate: Double
         get() = prefs.getFloat("currency_rate", 1f).toDouble()
         set(v) = prefs.edit().putFloat("currency_rate", v.toFloat()).apply()
@@ -254,8 +251,6 @@ class Store(context: Context) {
         }
     }.getOrDefault(emptyList())
 
-    fun loadRecent(): List<String> = loadRecentTimed().map { it.first }
-
     fun clearRecent() = prefs.edit().remove("recent").apply()
 
     /** Lock straight away when the phone screen turns off, whatever the auto-lock time. */
@@ -283,7 +278,7 @@ class Store(context: Context) {
         loadAddresses().forEach {
             arr.put(JSONObject().put("name", it.name).put("address", it.address).put("group", it.group)
                 .put("contact", it.contact).put("pinned", it.pinned).put("platform", it.platform).put("note", it.note)
-                .put("archived", it.archived))
+                .put("archived", it.archived).put("muted", it.muted))
         }
         return JSONObject().put("app", "Batwallet").put("version", 2).put("wallets", arr)
             .put("etherscan_key", etherscanKey).put("group_order", JSONArray(groupOrder)).toString(2)
@@ -297,10 +292,6 @@ class Store(context: Context) {
     var instantAlerts: Boolean
         get() = prefs.getBoolean("instant", false)
         set(v) = prefs.edit().putBoolean("instant", v).apply()
-
-    var priceSource: PriceSource
-        get() = runCatching { PriceSource.valueOf(prefs.getString("prices", PriceSource.AUTO.name)!!) }.getOrDefault(PriceSource.AUTO)
-        set(v) = prefs.edit().putString("prices", v.name).apply()
 
     /** Calls [listener] with the address whenever its saved balances change (e.g. after a payment alert). */
     fun onCacheChanged(listener: (String) -> Unit): SharedPreferences.OnSharedPreferenceChangeListener {
@@ -338,6 +329,7 @@ class Store(context: Context) {
                 explorerUrl = r.optString("explorer").ifEmpty { null },
                 active = r.optBoolean("active", true),
                 usdt = BigDecimal(r.optString("usdt", "0")),
+                usdc = BigDecimal(r.optString("usdc").ifEmpty { "0" }),
                 nativeSym = r.optString("nativeSym"),
                 native = BigDecimal(r.optString("native", "0")),
                 usd = r.optString("usd").ifEmpty { null }?.let { BigDecimal(it) },
@@ -354,7 +346,7 @@ class Store(context: Context) {
             arr.put(
                 JSONObject()
                     .put("chain", r.chain).put("rows", rows).put("explorer", r.explorerUrl.orEmpty())
-                    .put("active", r.active).put("usdt", r.usdt.toPlainString())
+                    .put("active", r.active).put("usdt", r.usdt.toPlainString()).put("usdc", r.usdc.toPlainString())
                     .put("nativeSym", r.nativeSym).put("native", r.native.toPlainString())
                     .put("usd", r.usd?.toPlainString().orEmpty())
             )

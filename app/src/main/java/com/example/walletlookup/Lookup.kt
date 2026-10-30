@@ -59,6 +59,7 @@ data class ChainResult(
     val active: Boolean = true,
     val error: String? = null,
     val usdt: BigDecimal = BigDecimal.ZERO,
+    val usdc: BigDecimal = BigDecimal.ZERO,
     val nativeSym: String = "",
     val native: BigDecimal = BigDecimal.ZERO,
     /** Everything on this network in dollars (stablecoins + native coin), null if the price is unavailable. */
@@ -68,25 +69,14 @@ data class ChainResult(
     val network: String get() = chain.substringBefore(" ·")
 }
 
-/** Where coin prices come from; chosen in Settings. */
-enum class PriceSource(val label: String) {
-    AUTO("Auto (CoinMarketCap, then Binance, Bybit, CoinGecko)"),
-    COINMARKETCAP("CoinMarketCap"),
-    BINANCE("Binance"),
-    BYBIT("Bybit"),
-    COINGECKO("CoinGecko"),
-}
-
-@Volatile var priceSource: PriceSource = PriceSource.AUTO
-
 /**
- * Every balance an address holds, keyed "SYMBOL|Network" (e.g. "USDT|Aptos", "APT|Aptos").
+ * Every balance an address holds, keyed "SYMBOL|Network" (e.g. "USDT|Aptos", "USDC|Solana", "APT|Aptos").
  * Networks that failed to load are left out so they are never mistaken for a change.
  */
 suspend fun snapshot(address: String, networks: Set<String>? = null): Map<String, BigDecimal> {
     val type = detect(address) ?: return emptyMap()
     return lookup(address, type, withPrices = false, networks = networks).filter { it.error == null && it.nativeSym.isNotEmpty() }.flatMap { r ->
-        listOf("USDT|${r.network}" to r.usdt, "${r.nativeSym}|${r.network}" to r.native)
+        listOf("USDT|${r.network}" to r.usdt, "USDC|${r.network}" to r.usdc, "${r.nativeSym}|${r.network}" to r.native)
     }.toMap()
 }
 
@@ -112,13 +102,16 @@ private const val B58 = "[1-9A-HJ-NP-Za-km-z]"
  * ("ethereum:", "bitcoin:", "tron:", "ton://transfer/" …), amounts and chain ids, and
  * picks the recipient out of ERC-20 transfer links.
  */
+private val URI_RECIPIENT = Regex("[?&]address=([^&]+)")
+private val TON_RAW_ADDRESS = Regex("^-?\\d:[0-9a-fA-F]{64}$")
+private val URI_SCHEME = Regex("^[a-zA-Z][a-zA-Z0-9+.-]*:")
+
 fun cleanAddress(raw: String): String {
     var s = raw.trim().replace("\n", "").replace(" ", "")
     // EIP-681 token transfer: ethereum:0xTOKEN@56/transfer?address=0xRECIPIENT&uint256=…
-    Regex("[?&]address=([^&]+)").find(s)?.let { if (s.contains("/transfer")) return it.groupValues[1] }
+    URI_RECIPIENT.find(s)?.let { if (s.contains("/transfer")) return it.groupValues[1] }
     s = s.removePrefix("ton://transfer/")
-    val raw0x = Regex("^-?\\d:[0-9a-fA-F]{64}$")
-    if (!raw0x.matches(s.substringBefore('?')) && Regex("^[a-zA-Z][a-zA-Z0-9+.-]*:").containsMatchIn(s)) {
+    if (!TON_RAW_ADDRESS.matches(s.substringBefore('?')) && URI_SCHEME.containsMatchIn(s)) {
         val scheme = s.substringBefore(':').lowercase()
         s = s.substringAfter(':').removePrefix("//")
         if (scheme in setOf("bitcoincash", "bchtest")) s = "bitcoincash:$s"
@@ -317,19 +310,20 @@ private fun build(
         chain, rows, explorer,
         active = native.signum() > 0 || stableSum.signum() > 0 || activity,
         usdt = stables.filter { it.first.startsWith("USDT") }.fold(BigDecimal.ZERO) { s, x -> s + x.second },
+        usdc = stables.filter { it.first.startsWith("USDC") }.fold(BigDecimal.ZERO) { s, x -> s + x.second },
         nativeSym = sym, native = native, usd = total,
     )
 }
 
 // ---------- EVM networks (public JSON-RPC) ----------
 
-private data class Token(val symbol: String, val contract: String, val decimals: Int)
-private data class EvmChain(
+internal data class Token(val symbol: String, val contract: String, val decimals: Int)
+internal data class EvmChain(
     val name: String, val rpcs: List<String>, val sym: String, val gecko: String,
     val explorer: String, val tokens: List<Token>,
 )
 
-private val EVM_CHAINS = listOf(
+internal val EVM_CHAINS = listOf(
     EvmChain("Ethereum", listOf("https://ethereum-rpc.publicnode.com"), "ETH", "ethereum", "https://etherscan.io/address/", listOf(
         Token("USDT (ERC20)", "0xdAC17F958D2ee523a2206206994597C13D831ec7", 6),
         Token("USDC (ERC20)", "0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48", 6),
@@ -367,9 +361,6 @@ private val EVM_CHAINS = listOf(
     EvmChain("Ethereum Classic", listOf("https://etc.etcdesktop.com", "https://0xrpc.io/etc"), "ETC", "ethereum-classic",
         "https://etc.blockscout.com/address/", emptyList()),
 )
-
-/** EVM network names in the order they are checked (used for history and explorers). */
-val EVM_NETWORKS: List<String> get() = EVM_CHAINS.map { it.name } + "VeChain"
 
 private fun evm(c: EvmChain, a: String, p: Map<String, Double>): ChainResult {
     fun call(id: Int, method: String, params: JSONArray) =
@@ -464,7 +455,8 @@ private fun blockcypher(name: String, coin: String, sym: String, gecko: String, 
 
 // ---------- Tron (TronGrid) ----------
 
-private const val USDT_TRC20 = "TR7NHqjeKQxGTCi8q8ZY4pL8otSzgjLj6t"
+/** Tether's USDT contracts, used by balances, history, the freeze check and transaction lookup alike. */
+internal const val USDT_TRC20 = "TR7NHqjeKQxGTCi8q8ZY4pL8otSzgjLj6t"
 
 private fun tron(a: String, p: Map<String, Double>): ChainResult {
     val explorer = "https://tronscan.org/#/address/$a"
@@ -561,7 +553,7 @@ private fun solana(a: String, p: Map<String, Double>): ChainResult {
 }
 // ---------- TON (tonapi for the account, toncenter for USDT) ----------
 
-private const val USDT_TON = "EQCxE6mUtQJKFnGfaROTKOt1lZbDiiX1kCixRv7Nw2Id_sDs"
+internal const val USDT_TON = "EQCxE6mUtQJKFnGfaROTKOt1lZbDiiX1kCixRv7Nw2Id_sDs"
 
 private fun ton(a: String, p: Map<String, Double>): ChainResult {
     val enc = URLEncoder.encode(a, "UTF-8")
@@ -605,7 +597,7 @@ private fun xrp(a: String, p: Map<String, Double>): ChainResult {
 // ---------- Aptos (official fullnode REST API) ----------
 
 private const val APTOS = "https://fullnode.mainnet.aptoslabs.com/v1"
-private const val USDT_APTOS = "0x357b0b74bc833e95a115ad22604854d6b0fca151cecd94111770e5d6ffc9dc2b"
+internal const val USDT_APTOS = "0x357b0b74bc833e95a115ad22604854d6b0fca151cecd94111770e5d6ffc9dc2b"
 
 private fun aptos(raw: String, p: Map<String, Double>): ChainResult {
     val a = "0x" + raw.removePrefix("0x").lowercase().padStart(64, '0')
@@ -764,14 +756,7 @@ private fun eos(a: String, p: Map<String, Double>): ChainResult {
     return build("EOS", "EOS", "eos", bal, p, explorer, extra = extra, activity = true)
 }
 
-// ===================== Explorer links & sharing =====================
-
-/** Block-explorer pages for an address, for the networks where it was found (or all of its networks). */
-fun explorerLinks(address: String, results: List<ChainResult> = emptyList()): List<Pair<String, String>> {
-    val uromResults = results.filter { it.active && it.explorerUrl != null }.map { it.network to it.explorerUrl!! }
-    if (uromResults.isNotEmpty()) return uromResults
-    return results.filter { it.explorerUrl != null }.take(3).map { it.network to it.explorerUrl!! }
-}
+// ===================== Lookalikes =====================
 
 /**
  * Address-poisoning guard: a different address that starts and ends like one of your saved wallets.
@@ -809,25 +794,23 @@ private fun prices(): Map<String, Double> {
     priceCache?.let { (t, m) -> if (System.currentTimeMillis() - t < 30_000 && m.size >= PAIRS.size - 2) return m }
     val out = mutableMapOf<String, Double>()
     fun missing() = PAIRS.filterKeys { it !in out }
-    val src = priceSource
-    fun use(s: PriceSource) = (src == PriceSource.AUTO || src == s) && missing().isNotEmpty()
 
     // CoinMarketCap first, then the exchanges, then CoinGecko for anything still missing.
-    if (use(PriceSource.COINMARKETCAP)) runCatching {
+    runCatching {
         cmcQuotes().forEach { (id, q) -> out[id] = q.first }
     }
-    if (use(PriceSource.BINANCE)) runCatching {
+    if (missing().isNotEmpty()) runCatching {
         val arr = JSONArray(http("https://api.binance.com/api/v3/ticker/price"))
         val bySymbol = (0 until arr.length()).associate { arr.getJSONObject(it).let { o -> o.getString("symbol") to o.getString("price") } }
         missing().forEach { (id, pair) -> bySymbol[pair]?.toDoubleOrNull()?.let { out[id] = it } }
     }
-    if (use(PriceSource.BYBIT)) runCatching {
+    if (missing().isNotEmpty()) runCatching {
         val list = JSONObject(http("https://api.bybit.com/v5/market/tickers?category=spot"))
             .getJSONObject("result").getJSONArray("list")
         val bySymbol = (0 until list.length()).associate { list.getJSONObject(it).let { o -> o.getString("symbol") to o.optString("lastPrice") } }
         missing().forEach { (id, pair) -> bySymbol[pair]?.toDoubleOrNull()?.let { out[id] = it } }
     }
-    if (use(PriceSource.COINGECKO)) runCatching {
+    if (missing().isNotEmpty()) runCatching {
         val j = JSONObject(http("https://api.coingecko.com/api/v3/simple/price?vs_currencies=usd&ids=" + missing().keys.joinToString(",")))
         j.keys().forEach { out[it] = j.getJSONObject(it).optDouble("usd") }
     }
@@ -903,9 +886,6 @@ private fun cmcQuotes(): Map<String, Pair<Double, Double>> {
     return out
 }
 
-/** Drop cached prices, e.g. after the price source changes. */
-fun clearPriceCache() { priceCache = null; changeCache = null }
-
 // ===================== Today's change =====================
 
 private val SYM_GECKO = mapOf(
@@ -920,11 +900,11 @@ data class DayChange(val usd: BigDecimal, val percent: Double)
 
 @Volatile private var changeCache: Pair<Long, Map<String, Double>>? = null
 
-/** 24-hour price change in percent per coin (from the chosen source; Binance, then CoinGecko otherwise). */
+/** 24-hour price change in percent per coin (CoinMarketCap; Binance, then CoinGecko for anything missing). */
 private fun changes24h(): Map<String, Double> {
     changeCache?.let { (t, m) -> if (System.currentTimeMillis() - t < 120_000) return m }
     val out = mutableMapOf<String, Double>()
-    if (priceSource == PriceSource.COINMARKETCAP || priceSource == PriceSource.AUTO) runCatching {
+    runCatching {
         cmcQuotes().forEach { (id, q) -> out[id] = q.second }
     }
     if (out.size < PAIRS.size) runCatching {
@@ -1082,19 +1062,23 @@ fun lookalikeOf(address: String): SavedAddress? = lookalike(address, lookalikeSo
 
 // ===================== Smart paste / text scan =====================
 
+private val NOT_ALNUM = Regex("[^a-z0-9]+")
+
+/** Words that name a network, in the order they are tried (the first match wins). */
+private val NETWORK_HINTS = listOf(
+    Regex(" (bep20|bep 20|bsc|bnb smart chain|binance smart chain|bnb chain) ") to "BSC",
+    Regex(" (erc20|erc 20|ethereum|eth mainnet) ") to "Ethereum",
+    Regex(" (polygon|matic|pol) ") to "Polygon",
+    Regex(" (arbitrum|arb) ") to "Arbitrum",
+    Regex(" (optimism|op mainnet) ") to "Optimism",
+    Regex(" (avalanche|avax|avax c) ") to "Avalanche",
+    Regex(" base (network|chain|mainnet) |\\bon base\\b") to "Base",
+)
+
 /** Network named in a message ("USDT BEP20", "send on Polygon"), used to pick the network for a 0x address. */
 fun networkHint(text: String): String? {
-    val t = " " + text.lowercase().replace(Regex("[^a-z0-9]+"), " ") + " "
-    return when {
-        Regex(" (bep20|bep 20|bsc|bnb smart chain|binance smart chain|bnb chain) ").containsMatchIn(t) -> "BSC"
-        Regex(" (erc20|erc 20|ethereum|eth mainnet) ").containsMatchIn(t) -> "Ethereum"
-        Regex(" (polygon|matic|pol) ").containsMatchIn(t) -> "Polygon"
-        Regex(" (arbitrum|arb) ").containsMatchIn(t) -> "Arbitrum"
-        Regex(" (optimism|op mainnet) ").containsMatchIn(t) -> "Optimism"
-        Regex(" (avalanche|avax|avax c) ").containsMatchIn(t) -> "Avalanche"
-        Regex(" base (network|chain|mainnet) |\\bon base\\b").containsMatchIn(t) -> "Base"
-        else -> null
-    }
+    val t = " " + text.lowercase().replace(NOT_ALNUM, " ") + " "
+    return NETWORK_HINTS.firstOrNull { it.first.containsMatchIn(t) }?.second
 }
 
 /** Common camera mix-ups inside hex addresses (O → 0, l / I → 1); base58 addresses are left alone. */
@@ -1107,14 +1091,17 @@ private fun fixHex(token: String): String =
  * A 0x address gets the network the text names, if any. Words that only look like addresses on networks with
  * free-form names (EOS accounts, NEAR names) are ignored here, so normal words never count.
  */
+private val LINE_BREAK = Regex("\\s*\\n\\s*")
+private val WORD_BREAK = Regex("[\\s,;()\\[\\]{}<>\"'`|]+")
+
 fun extractAddresses(text: String): List<String> {
     if (text.isBlank()) return emptyList()
     val hint = networkHint(text)
     // Addresses are sometimes split over two lines (in photos and narrow chats): try the text joined up too.
-    val variants = listOf(text, text.replace(Regex("\\s*\\n\\s*"), ""))
+    val variants = listOf(text, text.replace(LINE_BREAK, ""))
     val found = LinkedHashSet<String>()
     for (v in variants) {
-        for (raw in v.split(Regex("[\\s,;()\\[\\]{}<>\"'`|]+"))) {
+        for (raw in v.split(WORD_BREAK)) {
             val token = fixHex(cleanAddress(raw.trim().trimEnd('.', ':', '!', '?')))
             val type = detect(token) ?: continue
             if (type == AddrType.EOS || type == AddrType.LIGHTNING) continue
@@ -1127,8 +1114,13 @@ fun extractAddresses(text: String): List<String> {
     return found.filter { a -> netOf(a) != null || found.none { it != a && rawAddress(it).equals(a, true) } }.distinct()
 }
 
+/** Transaction ID shapes: 64 hex (Tron, Bitcoin, Litecoin, TON), 0x + 64 hex (EVM, Aptos), a Solana signature. */
+internal val HEX64 = Regex("^[0-9a-fA-F]{64}$")
+internal val HEX64_0X = Regex("^0x[0-9a-fA-F]{64}$")
+internal val SOL_SIGNATURE = Regex("^[1-9A-HJ-NP-Za-km-z]{86,90}$")
+
 /** Looks like a transaction ID rather than an address: 64 hex (Tron, Bitcoin…), 0x + 64 hex (EVM, Aptos) or a Solana signature. */
 fun looksLikeTxHash(s: String): Boolean {
     val t = s.trim()
-    return Regex("^(0x)?[0-9a-fA-F]{64}$").matches(t) || Regex("^[1-9A-HJ-NP-Za-km-z]{86,90}$").matches(t)
+    return HEX64.matches(t) || HEX64_0X.matches(t) || SOL_SIGNATURE.matches(t)
 }

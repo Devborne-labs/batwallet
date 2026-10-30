@@ -5,8 +5,10 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.foundation.layout.size
 import androidx.compose.animation.animateContentSize
-import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.clickable
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Share
+import androidx.compose.material3.Icon
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -16,22 +18,15 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.material3.Card
-import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.geometry.Offset
-import androidx.compose.ui.graphics.Path
-import androidx.compose.ui.graphics.StrokeCap
-import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
-import java.math.BigDecimal
 
 /** Recognisable tokens beyond USDT/USDC and the native coin. Not counted in totals. */
 @Composable
@@ -73,28 +68,22 @@ private fun SectionHeader(title: String, action: String? = null, onAction: () ->
     }
 }
 
-/** Payments the alerts noticed recently across your wallets. */
+/** Home's quiet backup nudge; tap to go to Settings → Backup. [days] since the last backup, 0 when there never was one. */
 @Composable
-fun ActivitySection(items: List<Pair<SavedAddress, Seen>>) {
-    Column {
-        SectionHeader("Recent activity")
-        Card(Modifier.fillMaxWidth().animateContentSize()) {
-            Column(Modifier.padding(vertical = 6.dp)) {
-                items.forEach { (w, s) ->
-                    val incoming = s.amount.signum() > 0
-                    Row(Modifier.fillMaxWidth().padding(horizontal = 18.dp, vertical = 10.dp),
-                        verticalAlignment = androidx.compose.ui.Alignment.CenterVertically) {
-                        Column(Modifier.weight(1f)) {
-                            Text((if (incoming) "Received · " else "Sent · ") + w.name, maxLines = 1)
-                            Text("${s.network} · ${shortDate(s.time / 1000)}", style = MaterialTheme.typography.labelSmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant)
-                        }
-                        Text((if (incoming) "+" else "−") + hideable(transferValue(s.amount.abs(), s.symbol)),
-                            fontWeight = if (incoming) FontWeight.SemiBold else FontWeight.Normal)
-                    }
-                }
-            }
-        }
+fun BackupBanner(days: Int, onClick: () -> Unit) {
+    Row(
+        Modifier.fillMaxWidth().padding(top = 4.dp).clip(RoundedCornerShape(14.dp))
+            .background(MaterialTheme.colorScheme.surfaceVariant).clickable(onClick = onClick)
+            .padding(horizontal = 16.dp, vertical = 12.dp),
+        verticalAlignment = androidx.compose.ui.Alignment.CenterVertically,
+    ) {
+        Icon(Icons.Filled.Share, contentDescription = null, modifier = Modifier.size(18.dp))
+        Spacer(Modifier.width(10.dp))
+        Text(
+            if (days == 0) tr("No backup yet") else tr("No backup for %d days").replace("%d", days.toString()),
+            style = MaterialTheme.typography.bodyMedium, modifier = Modifier.weight(1f),
+        )
+        Text("Export", style = MaterialTheme.typography.labelLarge, fontWeight = FontWeight.SemiBold, color = MaterialTheme.colorScheme.primary)
     }
 }
 

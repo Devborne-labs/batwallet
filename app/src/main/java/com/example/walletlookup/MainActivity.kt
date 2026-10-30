@@ -3,7 +3,6 @@ package com.example.walletlookup
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.foundation.pager.HorizontalPager
-import androidx.compose.foundation.pager.PagerDefaults
 import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Refresh
@@ -15,8 +14,6 @@ import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material.icons.filled.Info
 import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.foundation.layout.widthIn
-import androidx.compose.material.icons.filled.Menu
-import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.gestures.detectDragGesturesAfterLongPress
 import androidx.compose.runtime.withFrameNanos
 import kotlinx.coroutines.flow.collectLatest
@@ -84,9 +81,7 @@ import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.AlertDialog
-import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Icon
-import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CircularProgressIndicator
@@ -96,7 +91,6 @@ import androidx.compose.material3.FilterChip
 import androidx.compose.material3.pulltorefresh.PullToRefreshBox
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.material3.HorizontalDivider
-import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.NavigationBar
 import androidx.compose.material3.NavigationBarItem
@@ -137,6 +131,8 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.window.Dialog
+import androidx.compose.ui.window.DialogProperties
 import androidx.core.content.ContextCompat
 import androidx.fragment.app.FragmentActivity
 import androidx.lifecycle.Lifecycle
@@ -237,16 +233,15 @@ class MainActivity : FragmentActivity() {
         themeMode = store.theme
         lockEnabled = store.lockEnabled
         lockTimeout = store.lockTimeoutSec
-        store.switchToUsdtOnce()
-        store.dropChartData()
         fiat = store.currency
         fiatRate = store.currencyRate
         // The lock always covers the whole app (locking only Wallets left the total visible on Home).
         locked = lockEnabled && canAuthenticate()
         lifecycleScope.launch { runCatching { weeklyUpdateCheck(applicationContext) } }
         SelfUpdate.cleanUp(this)
-        priceSource = PriceSource.AUTO // always automatic: CoinMarketCap first, then the backups
         etherscanKey = store.etherscanKey
+        // Alerts can do nothing without the notification permission: if it was taken away, switch them off.
+        if (store.alertsEnabled && !Alerts.canNotify(this)) store.alertsEnabled = false
         // Background alerts and the screen-off lock are extras: if either fails, the app still opens.
         runCatching { Alerts.apply(this) }
         receiverRegistered = runCatching {
@@ -385,20 +380,27 @@ private fun BatLogo(size: Dp) {
 
 @Composable
 private fun LockScreen(onUnlock: () -> Unit) {
-    // Covers the app completely; Back does nothing here (it must not reach the pages underneath).
-    BackHandler {}
-    Surface(
-        Modifier.fillMaxSize().pointerInput(Unit) { awaitPointerEventScope { while (true) awaitPointerEvent() } },
+    // Its own full-screen window, created after any dialog or sheet that was open, so it covers those too: a QR
+    // dialog or a transactions sheet is a separate window above the app's content, not something an overlay in
+    // the content could hide. Back does nothing here (it must not reach the pages underneath).
+    Dialog(
+        onDismissRequest = {},
+        properties = DialogProperties(
+            dismissOnBackPress = false, dismissOnClickOutside = false, usePlatformDefaultWidth = false, decorFitsSystemWindows = false,
+        ),
     ) {
-        // Logo sits in the upper part of the screen so the system fingerprint sheet never covers it.
-        Column(
-            Modifier.fillMaxSize().systemBarsPadding().padding(32.dp),
-            horizontalAlignment = Alignment.CenterHorizontally,
-        ) {
-            Spacer(Modifier.weight(0.5f))
-            BatLogo(88.dp)
-            Spacer(Modifier.weight(1f))
-            TextButton(onClick = onUnlock) { Text("Unlock") }
+        BackHandler {}
+        Surface(Modifier.fillMaxSize()) {
+            // Logo sits in the upper part of the screen so the system fingerprint sheet never covers it.
+            Column(
+                Modifier.fillMaxSize().systemBarsPadding().padding(32.dp),
+                horizontalAlignment = Alignment.CenterHorizontally,
+            ) {
+                Spacer(Modifier.weight(0.5f))
+                BatLogo(88.dp)
+                Spacer(Modifier.weight(1f))
+                TextButton(onClick = onUnlock) { Text("Unlock") }
+            }
         }
     }
 }
@@ -541,7 +543,7 @@ private fun App(
     fun handleText(text: String, fromPhoto: Boolean): Boolean {
         val found = extractAddresses(text)
         // 0x + 64 characters is both an Aptos address and an EVM transaction ID: let you choose.
-        val maybeTx = found.singleOrNull()?.let(::rawAddress)?.takeIf { Regex("^0x[0-9a-fA-F]{64}$").matches(it) }
+        val maybeTx = found.singleOrNull()?.let(::rawAddress)?.takeIf { HEX64_0X.matches(it) }
         choicesTx = maybeTx
         when {
             found.size == 1 && !fromPhoto && maybeTx == null -> openAddress(found[0])
@@ -553,8 +555,9 @@ private fun App(
         }
         return true
     }
-    LaunchedEffect(shared) {
-        val text = shared ?: return@LaunchedEffect
+    LaunchedEffect(shared, locked) {
+        // Shared text waits until the app is unlocked, so its dialog can't open on top of the lock screen.
+        val text = shared?.takeIf { !locked } ?: return@LaunchedEffect
         onSharedHandled()
         // Full-screen pages would cover the result, so shared text always lands on Home.
         scanning = false; txInfo = null; homeTx = null; historyFor = null
@@ -564,16 +567,20 @@ private fun App(
         }
     }
 
-    // Payments detected by alerts across your own wallets, newest first. Home shows these only until the recent
-    // transactions list has loaded, so once it has, every wallet's saved log isn't read back on each balance update.
-    val activity = remember(cache, saved, recentTx.isEmpty()) {
-        if (recentTx.isNotEmpty()) emptyList<Pair<SavedAddress, Seen>>()
-        else saved.filter { !it.contact && !it.archived }
-            .flatMap { w -> store.loadActivity(w.address).map { w to it } }
-            .sortedByDescending { it.second.time }
-            .take(5)
-    }
     var todayChange by remember { mutableStateOf<DayChange?>(null) }
+    // Backup reminder: wallets or contacts changed after the last export (or there never was one) and that export
+    // is over 30 days old. Days since it, 0 for "never".
+    var lastBackup by remember { mutableStateOf(store.lastBackup) }
+    val backupDue: Int? = remember(saved, lastBackup) {
+        val changed = store.addressesChangedAt
+        when {
+            saved.isEmpty() || changed <= lastBackup -> null
+            lastBackup == 0L -> 0
+            else -> ((System.currentTimeMillis() - lastBackup) / 86_400_000L).toInt().takeIf { it >= 30 }
+        }
+    }
+    // A Settings section Home asks to open (e.g. Backup from the reminder).
+    var settingsRequest by remember { mutableStateOf<String?>(null) }
     var tokens by remember { mutableStateOf<List<TokenBalance>?>(null) }
     var tokensFor by remember { mutableStateOf<String?>(null) }
 
@@ -656,10 +663,14 @@ private fun App(
     // running: it just runs once more afterwards. (Before, every balance refresh restarted it, so with frequent
     // alerts it rarely finished and Home kept showing old payments.)
     val recentRequests = remember { kotlinx.coroutines.channels.Channel<Unit>(kotlinx.coroutines.channels.Channel.CONFLATED) }
+    // Set by pull-down, a payment and wallet changes: the next round asks every wallet, not just the changed ones.
+    val recentForced = remember { java.util.concurrent.atomic.AtomicBoolean(true) }
+    // Per wallet: when its history was last fetched, and the balances it had then (its cached results, as text).
+    val recentFetched = remember { HashMap<String, Pair<Long, String>>() }
     LaunchedEffect(Unit) {
         while (true) { recentRequests.trySend(Unit); delay(3 * 60_000L) }
     }
-    LaunchedEffect(saved.count { !it.contact && !it.archived }, recentForce) { recentRequests.trySend(Unit) }
+    LaunchedEffect(saved.count { !it.contact && !it.archived }, recentForce) { recentForced.set(true); recentRequests.trySend(Unit) }
     LaunchedEffect(Unit) {
         for (request in recentRequests) {
             // An exchange's own wallet (a known public one) moves other people's money all day: keep it off Home.
@@ -668,6 +679,16 @@ private fun App(
             val keep = mine.map { it.address }.toSet()
             recentTx = recentTx.filter { it.first in keep }
             if (mine.isEmpty()) { store.saveRecentTx(recentTx); continue }
+            // The 3-minute round only asks wallets whose balances changed since their last fetch, or that haven't
+            // been asked for 15 minutes; pull-down, a payment and wallet changes ask all of them.
+            val forced = recentForced.getAndSet(false)
+            val now = System.currentTimeMillis()
+            fun balancesOf(w: SavedAddress) = cache[w.address]?.results.orEmpty()
+                .joinToString { "${it.chain}:${it.usdt.toPlainString()}:${it.usdc.toPlainString()}:${it.native.toPlainString()}" }
+            val due = mine.filter { w ->
+                val last = recentFetched[w.address]
+                forced || last == null || last.second != balancesOf(w) || now - last.first > 15 * 60_000L
+            }
             /** This wallet's payments for Home: its history plus what the alerts saw (exchange sends and dust left out). */
             fun entries(w: SavedAddress, hist: List<History>): List<Triple<String, String, Transfer>> {
                 val out = mutableListOf<Triple<String, String, Transfer>>()
@@ -692,13 +713,14 @@ private fun App(
             }
             val gate = kotlinx.coroutines.sync.Semaphore(4)
             kotlinx.coroutines.coroutineScope {
-                mine.forEach { w ->
+                due.forEach { w ->
                     launch {
                         gate.acquire()
                         try {
                             val hist = withTimeoutOrNull(20_000) {
                                 runCatching { history(w.address, activeNetworks(cache[w.address]?.results.orEmpty()), limit = 10) }.getOrNull()
                             }
+                            if (hist != null) recentFetched[w.address] = now to balancesOf(w)
                             merge(w.address, entries(w, hist.orEmpty()), replace = hist != null)
                             // Payments the alerts saw without details: look for them now, then show what was found.
                             runCatching { Alerts.resolveMissing(context, w) }
@@ -746,7 +768,8 @@ private fun App(
             delay(20_000)
             if (!lifecycle.currentState.isAtLeast(Lifecycle.State.RESUMED)) continue
             if (store.alertsEnabled) {
-                runCatching { kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) { Alerts.checkWallets(context) } }
+                // In instant mode the service already checks every 30 seconds: no second loop on top of it.
+                if (!WatchService.running) runCatching { kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) { Alerts.checkWallets(context) } }
             } else if (++rounds % 3 == 0 && syncing.isEmpty()) {
                 syncAll()
             }
@@ -1002,6 +1025,8 @@ private fun App(
             when (page) {
                 0 -> HomeTab(
                     onOpenUpdate = { SelfUpdate.openInSettings = true; tab = TAB_SETTINGS },
+                    backupDue = backupDue,
+                    onOpenBackup = { settingsRequest = "backup"; tab = TAB_SETTINGS },
                     saved = saved,
                     cache = cache,
                     syncing = syncing,
@@ -1039,7 +1064,6 @@ private fun App(
                     onCheckTx = { txCheckFor = "" },
                     onCompare = { comparing = true },
                     onSendCheck = { sendChecking = true },
-                    activity = activity,
                     onOpen = { address = it },
                     onSeeAll = { tab = TAB_WALLETS },
                     platform = remember(address, homeHistory) { platformOf(address, homeHistory) },
@@ -1130,13 +1154,10 @@ private fun App(
                     themeMode, onThemeChange, lockAvailable, lockEnabled, onLockChange, store,
                     lockTimeout = lockTimeout,
                     onLockTimeoutChange = onLockTimeoutChange,
-                    onPriceSourceChange = {
-                        priceSource = it
-                        store.priceSource = it
-                        clearPriceCache()
-                        refresh++
-                        syncAll()
-                    },
+                    openRequest = settingsRequest,
+                    onOpenHandled = { settingsRequest = null },
+                    lastBackup = lastBackup,
+                    onBackedUp = { lastBackup = it },
                     hidden = hidden,
                     onHiddenChange = { hidden = it; store.hideBalances = it },
                     onImport = { imported ->
@@ -1161,12 +1182,13 @@ private fun App(
         )
     }
     // An update in progress (started in Settings) and, once after updating, what changed.
-    UpdateProgressDialog()
+    // Dialogs are windows above the lock screen's, so none may open while locked; they show once it's unlocked.
+    if (!locked) UpdateProgressDialog()
     var whatsNew by remember { mutableStateOf<String?>(null) }
     LaunchedEffect(Unit) {
         if (justUpdated(context, saved.isNotEmpty())) whatsNew = releaseNotes(BatApp.appVersion(context))
     }
-    whatsNew?.let { WhatsNewDialog(BatApp.appVersion(context), it) { whatsNew = null } }
+    if (!locked) whatsNew?.let { WhatsNewDialog(BatApp.appVersion(context), it) { whatsNew = null } }
     txCheckFor?.let { initial ->
         TxCheckDialog(initial, onFound = { txCheckFor = null; txInfo = it }, onDismiss = { txCheckFor = null })
     }
@@ -1241,7 +1263,9 @@ private fun HomeTab(
     onCheckTx: () -> Unit,
     onCompare: () -> Unit,
     onSendCheck: () -> Unit = {},
-    activity: List<Pair<SavedAddress, Seen>>,
+    /** Days since the last backup when a reminder is due (0 = never backed up), else null. */
+    backupDue: Int? = null,
+    onOpenBackup: () -> Unit = {},
     onOpen: (String) -> Unit,
     onSeeAll: () -> Unit,
     onClearRecent: () -> Unit,
@@ -1274,6 +1298,7 @@ private fun HomeTab(
             item { TotalHeader(saved.filter { !it.contact && !it.archived && !it.onExchange }, cache, syncing, dayChange, onToggleHidden) }
             // A newer version found by the weekly check (or by Settings): one small line, tap to update.
             if (newer != null) item { UpdateBanner(newer, onOpenUpdate) }
+            if (backupDue != null) item { BackupBanner(backupDue, onOpenBackup) }
             item {
                 Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                     // Tap: finds the address in whatever was copied (even a whole message), else shows recent checks.
@@ -1325,7 +1350,7 @@ private fun HomeTab(
                         }
                     }
                 }
-            } else if (activity.isNotEmpty()) item { ActivitySection(activity) }
+            }
             if (mine.isEmpty()) item { EmptyHint() }
             }
             if (address.isNotEmpty()) {
@@ -1670,7 +1695,8 @@ private fun WalletsTab(
         }
         return Page(shown, orderedNames, (orderedNames + grouped.keys.filter { it.isBlank() }).associateWith { grouped.getValue(it) }, searchable)
     }
-    val pages = listOf(page(false), page(true))
+    // Grouped and sorted once per change of what goes in, not on every frame (a drag redraws many times a second).
+    val pages = remember(saved, cache, sort, query, showArchived, hideSmall, groupOrder) { listOf(page(false), page(true)) }
     val current = pages[subPage]
 
     /** Dragging while sorted by value or name first makes what's on screen your own order, then moves from there. */
@@ -1994,7 +2020,8 @@ private fun WalletRow(
             Text(item.name, style = MaterialTheme.typography.bodyLarge, fontWeight = FontWeight.SemiBold,
                 maxLines = 1, overflow = TextOverflow.Ellipsis)
             Text(
-                (if (item.archived) tr("Archived") + " · " else "") + (if (item.pinned) tr("Pinned") + " · " else "") + labelOf(item.address),
+                (if (item.archived) tr("Archived") + " · " else "") + (if (item.pinned) tr("Pinned") + " · " else "") +
+                    (if (item.muted) tr("Muted") + " · " else "") + labelOf(item.address),
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 maxLines = 1,
@@ -2028,22 +2055,6 @@ private fun WalletRow(
                 DropdownMenuItem(text = { Text("Delete", color = MaterialTheme.colorScheme.error) }, onClick = { menu = false; onDelete(item) })
             }
         }
-    }
-}
-
-/** Round icon button with a label underneath (Trust Wallet's Send / Receive row). */
-@Composable
-private fun ActionButton(icon: androidx.compose.ui.graphics.vector.ImageVector, label: String, onClick: () -> Unit) {
-    Column(
-        Modifier.clip(RoundedCornerShape(14.dp)).clickable(onClick = onClick).padding(horizontal = 6.dp, vertical = 4.dp),
-        horizontalAlignment = Alignment.CenterHorizontally,
-    ) {
-        Box(
-            Modifier.size(50.dp).clip(androidx.compose.foundation.shape.CircleShape).background(MaterialTheme.colorScheme.surfaceVariant),
-            contentAlignment = Alignment.Center,
-        ) { Icon(icon, contentDescription = null, tint = MaterialTheme.colorScheme.onSurface, modifier = Modifier.size(22.dp)) }
-        Spacer(Modifier.height(6.dp))
-        Text(label, style = MaterialTheme.typography.labelMedium, maxLines = 1)
     }
 }
 
@@ -2194,6 +2205,7 @@ private fun WalletDialog(
     var group by remember { mutableStateOf(initial.group) }
     var addr by remember { mutableStateOf(initial.address) }
     var contact by remember { mutableStateOf(initial.contact) }
+    var muted by remember { mutableStateOf(initial.muted) }
     var net by remember { mutableStateOf(netOf(initial.address)) }
     var platform by remember { mutableStateOf(initial.platform) }
     var note by remember { mutableStateOf(initial.note) }
@@ -2253,6 +2265,7 @@ private fun WalletDialog(
                         style = MaterialTheme.typography.bodySmall)
                 }
                 OutlinedTextField(value = note, onValueChange = { note = it }, label = { Text("Note (optional)") }, maxLines = 3)
+                if (!contact) SwitchRow("Mute alerts", "Still refreshed and logged, never notifies", muted) { muted = it }
                 if (type == AddrType.EVM) {
                     Text("Network", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
                     Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
@@ -2267,7 +2280,7 @@ private fun WalletDialog(
                 onClick = {
                     val full = if (type == AddrType.EVM) withNet(rawAddress(addr), net) else addr
                     onConfirm(initial.copy(name = name.trim(), address = full, group = if (contact) "" else group.trim(),
-                        contact = contact, platform = if (contact) "" else platform, note = note.trim()))
+                        contact = contact, platform = if (contact) "" else platform, note = note.trim(), muted = !contact && muted))
                 },
                 enabled = name.isNotBlank() && type != null && duplicate == null,
             ) { Text("Save") }
@@ -2306,7 +2319,11 @@ private fun SettingsTab(
     store: Store,
     lockTimeout: Int,
     onLockTimeoutChange: (Int) -> Unit,
-    onPriceSourceChange: (PriceSource) -> Unit,
+    /** A section Home asked to open ("backup"), cleared with [onOpenHandled] once opened. */
+    openRequest: String?,
+    onOpenHandled: () -> Unit,
+    lastBackup: Long,
+    onBackedUp: (Long) -> Unit,
     hidden: Boolean,
     onHiddenChange: (Boolean) -> Unit,
     onImport: (List<SavedAddress>) -> Int,
@@ -2327,6 +2344,7 @@ private fun SettingsTab(
         if (uri == null || content == null) return@rememberLauncherForActivityResult
         backupMessage = try {
             context.contentResolver.openOutputStream(uri)?.use { it.write(content.toByteArray()) }
+            System.currentTimeMillis().let { store.lastBackup = it; onBackedUp(it) }
             tr("Backup saved") + " (${saved.size})."
         } catch (e: Exception) {
             "Couldn't save the backup: ${e.message}"
@@ -2356,7 +2374,6 @@ private fun SettingsTab(
     var daily by remember { mutableStateOf(store.dailySummary) }
     var bigPay by remember { mutableIntStateOf(store.bigPayment) }
     var crash by remember { mutableStateOf(BatApp.lastCrash(context)) }
-    var source by remember { mutableStateOf(store.priceSource) }
     var batteryOk by remember { mutableStateOf(Alerts.ignoresBatteryLimits(context)) }
 
     // Re-check the battery setting when coming back from the system screen.
@@ -2390,13 +2407,14 @@ private fun SettingsTab(
     LaunchedEffect(SelfUpdate.openInSettings) {
         if (SelfUpdate.openInSettings) { open = "updates"; SelfUpdate.openInSettings = false }
     }
+    LaunchedEffect(openRequest) { openRequest?.let { open = it; onOpenHandled() } }
 
     Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(horizontal = 16.dp)) {
         SettingsSection("General") {
         SettingGroup("Appearance", tr(themeMode.label), open == "theme", { toggle("theme") }) {
             ThemeMode.entries.forEach { mode -> RadioRow(mode == themeMode, mode.label) { onThemeChange(mode) } }
         }
-        SettingGroup("Language", LANGUAGES.first { it.first == I18n.lang }.second, open == "lang", { toggle("lang") }) {
+        SettingGroup("Language", (LANGUAGES.firstOrNull { it.first == I18n.lang } ?: LANGUAGES.first()).second, open == "lang", { toggle("lang") }) {
             LANGUAGES.forEach { (code, label) ->
                 RadioRow(I18n.lang == code, label) { I18n.lang = code; store.language = code }
             }
@@ -2472,12 +2490,35 @@ private fun SettingsTab(
         }
         }
         SettingsSection("Data") {
-        SettingGroup("Backup", tr("Export or import"), open == "backup", { toggle("backup") }) {
+        val backupSummary = when {
+            lastBackup > 0 -> tr("Last backup") + " " + ago(lastBackup)
+            saved.isNotEmpty() -> tr("No backup yet")
+            else -> tr("Export or import")
+        }
+        SettingGroup("Backup", backupSummary, open == "backup", { toggle("backup") }) {
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.padding(vertical = 8.dp)) {
                 OutlinedButton(onClick = { askExport = true }, enabled = saved.isNotEmpty()) { Text("Export") }
                 OutlinedButton(onClick = { importer.launch(arrayOf("application/json", "text/plain", "*/*")) }) { Text("Import") }
             }
             backupMessage?.let { Text(it, style = MaterialTheme.typography.bodySmall) }
+        }
+        SettingGroup("Etherscan API key", tr(if (savedKey.isEmpty()) "Not set" else "Set"), open == "etherscan", { toggle("etherscan") }) {
+            Text(
+                "Optional. A free key from etherscan.io gives complete, instant history on BSC, Polygon, Arbitrum and Base. Without one, free sources are used.",
+                style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            OutlinedTextField(
+                value = keyText, onValueChange = { keyText = it.trim() }, singleLine = true, label = { Text("API key") },
+                textStyle = MaterialTheme.typography.bodySmall.copy(fontFamily = FontFamily.Monospace),
+                modifier = Modifier.fillMaxWidth().padding(top = 8.dp),
+            )
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.padding(vertical = 8.dp)) {
+                OutlinedButton(
+                    onClick = { store.etherscanKey = keyText; etherscanKey = keyText; savedKey = keyText },
+                    enabled = keyText != savedKey,
+                ) { Text("Save") }
+                if (savedKey.isNotEmpty()) TextButton(onClick = { keyText = ""; store.etherscanKey = ""; etherscanKey = ""; savedKey = "" }) { Text("Clear") }
+            }
         }
         }
         if (askExport) {

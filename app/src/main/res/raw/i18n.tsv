@@ -438,3 +438,13 @@ The installer didn't answer. Tap Update to try again.	Установщик не 
 Install	Установить	इंस्टॉल करें
 try	попытка	प्रयास
 of	из	में से
+Mute alerts	Без уведомлений	अलर्ट म्यूट करें
+Still refreshed and logged, never notifies	Обновляется и записывается, но не уведомляет	रिफ़्रेश और लॉग होता रहेगा, पर सूचना नहीं देगा
+Muted	Без уведомлений	म्यूट
+No backup yet	Резервной копии ещё нет	अभी तक बैकअप नहीं
+No backup for %d days	Без резервной копии уже %d дн.	%d दिनों से बैकअप नहीं
+Last backup	Последняя копия	आख़िरी बैकअप
+Set	Указан	सेट है
+API key	API-ключ	API कुंजी
+Optional. A free key from etherscan.io gives complete, instant history on BSC, Polygon, Arbitrum and Base. Without one, free sources are used.	Необязательно. Бесплатный ключ с etherscan.io даёт полную и быструю историю в BSC, Polygon, Arbitrum и Base. Без него используются бесплатные источники.	वैकल्पिक। etherscan.io की मुफ़्त कुंजी से BSC, Polygon, Arbitrum और Base पर पूरा और तुरंत इतिहास मिलता है। इसके बिना मुफ़्त स्रोत इस्तेमाल होते हैं।
+Full crash report copied: paste it into the issue	Полный отчёт о сбое скопирован: вставьте его в issue	पूरी क्रैश रिपोर्ट कॉपी हो गई: इसे issue में पेस्ट करें

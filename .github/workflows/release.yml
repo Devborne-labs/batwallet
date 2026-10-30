@@ -96,11 +96,17 @@ jobs:
           VERSION: ${{ steps.version.outputs.version }}
         run: |
           set -euo pipefail
-          # Release notes: the tag's own message when it has one, otherwise the commit's bullet list (its first
-          # line and any trailers left out). The app shows these under "What's new".
+          # Release notes, shown by the app under "What's new": the tag's own message when it has one; else, for a
+          # merged pull request, its description (minus the generated footer); else the commit's bullet list.
           NOTES=""
           if [ "$(git cat-file -t "$TAG" 2>/dev/null || true)" = "tag" ]; then
             NOTES=$(git tag -l --format='%(contents)' "$TAG" | sed -e '/^[[:space:]]*$/d' | head -c 10000 || true)
+          fi
+          if [ -z "$NOTES" ]; then
+            PR=$(git log -1 --format=%s HEAD | sed -nE 's/.*\(#([0-9]+)\)$/\1/p')
+            if [ -n "$PR" ]; then
+              NOTES=$(gh pr view "$PR" --json body --jq .body 2>/dev/null | sed -e '/^🤖 Generated with/,$d' -e '/^[[:space:]]*$/d' | head -c 10000 || true)
+            fi
           fi
           if [ -z "$NOTES" ]; then
             NOTES=$(git log -1 --format=%b HEAD | grep -vE '^(Co-Authored-By|Claude-Session|Signed-off-by):' | sed -e '/^[[:space:]]*$/d' || true)
