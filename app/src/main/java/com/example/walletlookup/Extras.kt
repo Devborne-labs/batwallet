@@ -346,12 +346,17 @@ private fun solanaHistory(a: String): History {
         }.getOrDefault(emptyList())
     }
     val sigs = (sigsOf(a, minOf(MAX, 20), 20) + tokenAccounts.flatMap { runCatching { sigsOf(it, 10, 10) }.getOrDefault(emptyList()) }).distinct()
-    // Four at a time (one by one took most of a minute).
+    // Four at a time (one by one took most of a minute). The pool's threads don't carry a background search's time
+    // budget by themselves, so each task is given it; and the waits for them end with it too.
+    val budget = currentRequestBudget()
     val pool = java.util.concurrent.Executors.newFixedThreadPool(4)
     val items = try {
-        sigs.map { sig -> pool.submit<Transfer?> { solanaTransfer(a, sig) } }
-            .mapNotNull { runCatching { it.get(20, java.util.concurrent.TimeUnit.SECONDS) }.getOrNull() }
-    } finally { pool.shutdown() }
+        sigs.map { sig -> pool.submit<Transfer?> { inRequestBudget(budget) { solanaTransfer(a, sig) } } }
+            .mapNotNull { f ->
+                val wait = minOf(20_000L, (requestTimeLeft() + 1_000).coerceAtLeast(0))
+                runCatching { f.get(wait, java.util.concurrent.TimeUnit.MILLISECONDS) }.getOrNull()
+            }
+    } finally { pool.shutdownNow() }
     return historyOf("Solana", bounds + Part(items))
 }
 

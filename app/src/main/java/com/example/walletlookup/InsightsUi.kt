@@ -300,6 +300,8 @@ fun HistoryScreen(
         if (nets == null || nets.size <= 1 || netOf(address) != null || network !in nets) { reload++; return }
         if (network in retrying) return
         retrying = retrying + network
+        // A pull-down or Load more started after this one supersedes it: its result is then dropped, not mixed in.
+        val startedAt = reload to limit
         scope.launch {
             try {
                 val fresh = try {
@@ -309,7 +311,7 @@ fun HistoryScreen(
                 } catch (_: Exception) {
                     emptyList()
                 }
-                if (fresh.isNotEmpty()) {
+                if (fresh.isNotEmpty() && (reload to limit) == startedAt) {
                     val order = nets.toList()
                     data = (data.orEmpty().filter { it.network != network } + fresh)
                         .sortedBy { order.indexOf(it.network).let { i -> if (i < 0) Int.MAX_VALUE else i } }

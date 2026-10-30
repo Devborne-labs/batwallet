@@ -70,6 +70,10 @@ object Alerts {
     private const val STEP_BUDGET_MS = 12_000L
     /** Time to trace one coin transfer through recent blocks (about 20 requests in a row). */
     private const val COIN_TRACE_BUDGET_MS = 10_000L
+    /** Less time than this left: a wallet's search for missing details doesn't start (it'd only use up its turn). */
+    private const val MIN_FILL_MS = 3_000L
+    /** Less time than this left: an entry's block search doesn't start, and isn't marked as searched. */
+    private const val MIN_SEARCH_MS = 2_000L
 
     /**
      * Start whatever the current settings ask for, and stop the rest. Safe to call any time.
@@ -289,10 +293,26 @@ object Alerts {
      * Also run by the app itself when Home loads.
      */
     suspend fun resolveMissing(context: Context, w: SavedAddress) {
-        withRequestBudget(FILL_BUDGET_MS) { fillMissingDetails(Store(context), w) }
+        fillMissingDetails(Store(context), w, FILL_BUDGET_MS)
     }
 
-    private suspend fun fillMissingDetails(store: Store, w: SavedAddress) = filling.withLock { fillMissingDetailsLocked(store, w) }
+    /**
+     * Searches [w]'s missing details within [budgetMs], counted from when it actually starts: waiting for another
+     * search doesn't use it up. While one is running (Home's or the background one), this one is skipped instead of
+     * waiting; the wallet gets its turn next time.
+     */
+    private suspend fun fillMissingDetails(store: Store, w: SavedAddress, budgetMs: Long) {
+        if (budgetMs < MIN_FILL_MS || !filling.tryLock()) return
+        try {
+            withRequestBudget(budgetMs) { fillMissingDetailsLocked(store, w) }
+        } catch (e: CancellationException) {
+            throw e
+        } catch (_: Exception) {
+            // Something unexpected in one wallet's search: the others still get theirs, and it's tried again later.
+        } finally {
+            filling.unlock()
+        }
+    }
 
     /**
      * Once: older versions logged a stablecoin send's fee as a "sent" entry of its own; those are removed. Only
@@ -318,7 +338,8 @@ object Alerts {
         // Entries without details that can still be matched.
         val pending = acts.filter { it.hash == null && now - it.time < detailsWindowMs(it.symbol) }
         if (pending.isEmpty()) return
-        if (now - (lastFill[w.address] ?: 0L) < fillGapMs(pending.minOf { now - it.time })) return
+        val previousFill = lastFill[w.address]
+        if (now - (previousFill ?: 0L) < fillGapMs(pending.minOf { now - it.time })) return
         lastFill[w.address] = now
         // A failed history request isn't the end: the block search below still runs. Only the networks of the
         // entries still missing details are asked (without them, history looks up every network's balance first).
@@ -332,37 +353,54 @@ object Alerts {
         val taken = acts.mapNotNull { it.hash }.toMutableSet()
         var changed = false
         var searches = 0
-        val updated = acts.flatMap { s ->
-            if (s.hash != null || now - s.time >= detailsWindowMs(s.symbol)) return@flatMap listOf(s)
-            val near = recent.filter { (n, t) -> n == s.network && t.symbol.equals(s.symbol, true) && (t.hash == null || t.hash !in taken) }
-            // Recent history first; then a search of the blocks around that time (a few per run).
-            // Each entry gets a block search at most every 10 minutes, so ones that can't be found yet don't use up
-            // the turns of the others (it used to always retry the newest three, and older ones never got a turn).
-            val key = "${w.address}|${s.network}|${s.symbol}|${s.amount.toPlainString()}|${s.time}"
-            val found = pickTransfers(near.map { it.second }, s.amount, s.time).ifEmpty {
-                if (now - (searchedAt[key] ?: 0L) >= 10 * 60_000L && searches++ < 3) {
-                    searchedAt[key] = now
-                    // Out of time (the run's budget) stops here, not just this entry's search.
-                    val hits = try {
-                        findTransfers(w.address, s.network, s.symbol, s.amount, s.time)
-                    } catch (e: CancellationException) {
-                        throw e
-                    } catch (_: Exception) {
-                        emptyList()
+        // There wasn't time left to search an entry that needed it: this run wasn't a real turn for the wallet.
+        var noTime = false
+        // Each entry's replacement (itself, or the transfers found for it), filled in as it goes, so what was found
+        // is saved even when the time runs out part-way.
+        val out = acts.map { listOf(it) }.toMutableList()
+        try {
+            for ((i, s) in acts.withIndex()) {
+                if (s.hash != null || now - s.time >= detailsWindowMs(s.symbol)) continue
+                val near = recent.filter { (n, t) -> n == s.network && t.symbol.equals(s.symbol, true) && (t.hash == null || t.hash !in taken) }
+                // Recent history first; then a search of the blocks around that time (a few per run).
+                // Each entry gets a block search at most every 10 minutes, so ones that can't be found yet don't use up
+                // the turns of the others (it used to always retry the newest three, and older ones never got a turn).
+                val key = "${w.address}|${s.network}|${s.symbol}|${s.amount.toPlainString()}|${s.time}"
+                var found = pickTransfers(near.map { it.second }, s.amount, s.time)
+                if (found.isEmpty() && now - (searchedAt[key] ?: 0L) >= 10 * 60_000L && searches < 3) {
+                    if (requestTimeLeft() < MIN_SEARCH_MS) {
+                        // Not enough time for a block search: it isn't marked as searched, so it isn't made to wait.
+                        noTime = true
+                    } else {
+                        searches++
+                        searchedAt[key] = now
+                        val hits = try {
+                            findTransfers(w.address, s.network, s.symbol, s.amount, s.time)
+                        } catch (e: CancellationException) {
+                            throw e
+                        } catch (_: Exception) {
+                            emptyList()
+                        }
+                        found = hits.filter { it.hash == null || it.hash !in taken }
                     }
-                    hits.filter { it.hash == null || it.hash !in taken }
-                } else emptyList()
+                }
+                if (found.isEmpty()) continue
+                found.forEach { t -> t.hash?.let { taken += it } }
+                changed = true
+                out[i] = found.map { t -> seenOf(s.symbol, s.network, t, s.time) }
             }
-            if (found.isEmpty()) return@flatMap listOf(s)
-            found.forEach { t -> t.hash?.let { taken += it } }
-            changed = true
-            found.map { t -> seenOf(s.symbol, s.network, t, s.time) }
-        }
-        if (changed && stillSaved(store, w.address)) {
-            // Payments a check recorded while this was searching are kept, not overwritten by the older list.
-            synchronized(ACTIVITY_LOCK) {
-                val newer = store.loadActivity(w.address).filter { it !in acts }
-                store.saveActivity(w.address, (newer + updated).sortedByDescending { it.time })
+        } finally {
+            // A wallet that got no real turn (no time for any search) isn't made to wait for its next one.
+            if (noTime && searches == 0) {
+                if (previousFill == null) lastFill.remove(w.address) else lastFill[w.address] = previousFill
+            }
+            if (changed) withContext(NonCancellable) {
+                if (!stillSaved(store, w.address)) return@withContext
+                // Payments a check recorded while this was searching are kept, not overwritten by the older list.
+                synchronized(ACTIVITY_LOCK) {
+                    val newer = store.loadActivity(w.address).filter { it !in acts }
+                    store.saveActivity(w.address, (newer + out.flatten()).sortedByDescending { it.time })
+                }
             }
         }
     }
@@ -564,8 +602,8 @@ object Alerts {
         val start = if (wallets.isEmpty()) 0 else checkRuns % wallets.size
         for (w in wallets.drop(start) + wallets.take(start)) {
             val left = fillUntil - System.currentTimeMillis()
-            if (left <= 0) break
-            withRequestBudget(left) { fillMissingDetails(store, w) }
+            if (left < MIN_FILL_MS) break
+            fillMissingDetails(store, w, left)
         }
     }
 }
