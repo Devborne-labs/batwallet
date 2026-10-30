@@ -1,0 +1,114 @@
+# Builds the signed release APK and publishes it as a GitHub release, which is what the app's in-app updater looks for.
+#
+# Runs when a version tag is pushed (git tag v19.9 && git push origin v19.9), or by hand from the Actions tab
+# (then the tag is taken from versionName in app/build.gradle.kts and created at the chosen commit).
+#
+# Needs four repository secrets (Settings → Secrets and variables → Actions):
+#   BATWALLET_KEYSTORE_BASE64  the release keystore (.jks) as base64, one line
+#   BATWALLET_STORE_PASSWORD   its password
+#   BATWALLET_KEY_ALIAS        the key alias ("batwallet")
+#   BATWALLET_KEY_PASSWORD     the key's password
+# The key itself never enters the repository: it is decoded into the runner's temp folder for the build only.
+
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Work out the version and tag
+        id: version
+        run: |
+          set -euo pipefail
+          VERSION=$(sed -nE 's/^\s*versionName = "([^"]+)".*/\1/p' app/build.gradle.kts)
+          [ -n "$VERSION" ] || { echo "versionName not found in app/build.gradle.kts"; exit 1; }
+          if [ "${GITHUB_REF_TYPE}" = "tag" ]; then
+            TAG="${GITHUB_REF_NAME}"
+            # The app compares versions by number, so the tag must match what is built.
+            [ "$TAG" = "v$VERSION" ] || { echo "Tag $TAG does not match versionName $VERSION"; exit 1; }
+          else
+            TAG="v$VERSION"
+          fi
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+
+      - name: Check the signing secrets are set
+        env:
+          KEYSTORE_B64: ${{ secrets.BATWALLET_KEYSTORE_BASE64 }}
+          STORE_PASSWORD: ${{ secrets.BATWALLET_STORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.BATWALLET_KEY_ALIAS }}
+          KEY_PASSWORD: ${{ secrets.BATWALLET_KEY_PASSWORD }}
+        run: |
+          set -euo pipefail
+          # Without the key the build would quietly sign with the debug key, and phones would refuse the update.
+          for v in KEYSTORE_B64 STORE_PASSWORD KEY_ALIAS KEY_PASSWORD; do
+            [ -n "${!v}" ] || { echo "Secret for $v is not set (see the comment at the top of this workflow)"; exit 1; }
+          done
+          echo "$KEYSTORE_B64" | tr -d '\n\r ' | base64 -d > "$RUNNER_TEMP/batwallet-release.jks"
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+
+      - uses: gradle/actions/setup-gradle@v4
+
+      - name: Build the signed release APK (runs the logic checks first)
+        env:
+          STORE_PASSWORD: ${{ secrets.BATWALLET_STORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.BATWALLET_KEY_ALIAS }}
+          KEY_PASSWORD: ${{ secrets.BATWALLET_KEY_PASSWORD }}
+        run: |
+          set -euo pipefail
+          chmod +x gradlew
+          ./gradlew --no-daemon assembleRelease \
+            -PBATWALLET_STORE_FILE="$RUNNER_TEMP/batwallet-release.jks" \
+            -PBATWALLET_STORE_PASSWORD="$STORE_PASSWORD" \
+            -PBATWALLET_KEY_ALIAS="$KEY_ALIAS" \
+            -PBATWALLET_KEY_PASSWORD="$KEY_PASSWORD"
+          cp app/build/outputs/apk/release/app-release.apk Batwallet.apk
+
+      - name: Check the APK is signed with Batwallet's release key
+        run: |
+          set -euo pipefail
+          # The certificate's SHA-256, as keytool prints it for the release keystore. An APK signed with any other
+          # key (the debug key, a new keystore) is refused by the phones that already have Batwallet installed.
+          EXPECTED="d41add207fa7ed98898863ca9f276bca4ca90f70e00b277c506fc854b2377022"
+          APKSIGNER=$(ls -d "$ANDROID_HOME"/build-tools/*/apksigner | sort -V | tail -1)
+          ACTUAL=$("$APKSIGNER" verify --print-certs Batwallet.apk | sed -nE 's/.*certificate SHA-256 digest: ([0-9a-f]+).*/\1/p' | head -1)
+          echo "certificate SHA-256: $ACTUAL"
+          [ "$ACTUAL" = "$EXPECTED" ] || { echo "APK is not signed with the release key"; exit 1; }
+
+      - name: Publish the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.version.outputs.tag }}
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          set -euo pipefail
+          # Release notes: the tag's own message when it has one, otherwise the commit's bullet list (its first
+          # line and any trailers left out). The app shows these under "What's new".
+          NOTES=""
+          if [ "$(git cat-file -t "$TAG" 2>/dev/null || true)" = "tag" ]; then
+            NOTES=$(git tag -l --format='%(contents)' "$TAG" | sed -e '/^[[:space:]]*$/d' | head -c 10000 || true)
+          fi
+          if [ -z "$NOTES" ]; then
+            NOTES=$(git log -1 --format=%b HEAD | grep -vE '^(Co-Authored-By|Claude-Session|Signed-off-by):' | sed -e '/^[[:space:]]*$/d' || true)
+          fi
+          [ -n "$NOTES" ] || NOTES=$(git log -1 --format=%s HEAD | sed -E 's/^[0-9.]+: //')
+          PREVIOUS=$(gh release list --limit 1 --json tagName --jq '.[0].tagName // empty' | sed 's/^v//')
+          {
+            [ -n "$PREVIOUS" ] && printf '**Install:** on %s, Settings → Updates → Update.\n\n' "$PREVIOUS"
+            printf '%s\n' "$NOTES"
+          } > notes.md
+          gh release create "$TAG" Batwallet.apk --target "$GITHUB_SHA" --title "Batwallet $VERSION" --notes-file notes.md

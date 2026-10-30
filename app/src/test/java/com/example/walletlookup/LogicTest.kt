@@ -62,6 +62,31 @@ class LogicTest {
         assertEquals("46f3fb8c14006268d153b18000495c8ee858e94b", tronHex("TGSNahJvAdh86aR5pdcxiep1mBWSRK3HHL"))
     }
 
+    @Test fun detectsEachNetworkFromItsAddress() {
+        val samples = mapOf(
+            "0x3f5CE5FBFe3E9af3971dD833D26bA9b5C936f0bE" to AddrType.EVM,
+            "0x3f5CE5FBFe3E9af3971dD833D26bA9b5C936f0bE@BSC" to AddrType.EVM, // pinned to a network
+            "0x357b0b74bc833e95a115ad22604854d6b0fca151cecd94111770e5d6ffc9dc2b" to AddrType.APTOS,
+            "TGSNahJvAdh86aR5pdcxiep1mBWSRK3HHL" to AddrType.TRON,
+            "Es9vMFrzaCERmJfrF4H2FYD4KCoNkY11McCe8BenwNYB" to AddrType.SOLANA,
+            "UQCD39VS5jcptHL8vMjEXrzGaRcCVYto7HUn4bpAOg8xqEBI" to AddrType.TON,
+            "0:83dfd552e63729b472fcbcc8c45ebcc6691702558b68ec7527e1ba403a0f31a8" to AddrType.TON,
+            "bc1qar0srrr7xfkvy5l643lydnw9re59gtzzwf5mdq" to AddrType.BITCOIN,
+            "1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa" to AddrType.BITCOIN,
+            "LdP8Qox1VAhCzLJNqrr74YovaWYyNBUWvL" to AddrType.LITECOIN,
+            "DH5yaieqoZN36fDVciNyRueRGvGLR3mr7L" to AddrType.DOGECOIN,
+            "rEb8TK3gBgk5auZkwc6sHnwrGVJH8DuaLh" to AddrType.XRP,
+            "GAHK7EEG2WWHVKDNT4CEQFZGKF2LGDSW2IVM4S5DP42RBW3K6BTODB4A" to AddrType.STELLAR,
+            "alice.near" to AddrType.NEAR,
+            "eosio.token" to AddrType.EOS,
+            "lnbc10u1p3xyz" to AddrType.LIGHTNING,
+        )
+        samples.forEach { (address, type) -> assertEquals(address, type, detect(address)) }
+        assertEquals(null, detect(""))
+        assertEquals(null, detect("hello world"))
+        assertEquals(null, detect("0x123"))
+    }
+
     @Test fun versionComparison() {
         assertTrue(isNewerVersion("19.10", "19.9"))
         assertTrue(isNewerVersion("20.0", "19.2"))

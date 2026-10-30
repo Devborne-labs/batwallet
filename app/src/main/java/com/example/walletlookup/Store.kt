@@ -265,7 +265,8 @@ class Store(context: Context) {
 
     /** Forget everything stored about a deleted wallet (balances, alert baseline, payment log). */
     fun forget(address: String) {
-        prefs.edit().remove("cache:$address").remove("snap:$address").remove("activity:$address").apply()
+        prefs.edit().remove("cache:$address").remove("snap:$address").remove("activity:$address")
+            .remove("safety:" + address.lowercase()).apply()
     }
 
     var hideBalances: Boolean
@@ -362,11 +363,11 @@ class Store(context: Context) {
     }
 
     /** Last balances seen by the background checker, or null if this address was never checked. */
-    fun loadSnapshot(address: String): Map<String, BigDecimal>? {
-        val json = prefs.getString("snap:$address", null) ?: return null
-        val o = JSONObject(json)
-        return o.keys().asSequence().associateWith { BigDecimal(o.getString(it)) }
-    }
+    fun loadSnapshot(address: String): Map<String, BigDecimal>? = runCatching {
+        // A damaged entry counts as "never checked": the next check records fresh starting balances.
+        val o = JSONObject(prefs.getString("snap:$address", null) ?: return null)
+        o.keys().asSequence().associateWith { BigDecimal(o.getString(it)) }
+    }.getOrNull()
 
     fun saveSnapshot(address: String, snap: Map<String, BigDecimal>) {
         val o = JSONObject()
