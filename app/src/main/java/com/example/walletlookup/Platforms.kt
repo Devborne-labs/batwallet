@@ -9,7 +9,19 @@ package com.example.walletlookup
  *     exchange's main wallets, so an address that sends its money to Binance's wallets is very likely a
  *     Binance deposit address.
  */
-data class Platform(val name: String, val how: String)
+data class Platform(val name: String, val how: String) {
+    /**
+     * [how] for showing, in the app's language. [how] itself stays in English because the app also reads it
+     * (a "Likely…" guess is only ever shown as possible).
+     */
+    val display: String
+        get() = when (how) {
+            "Known $name wallet" -> tr("Known %s wallet").replace("%s", name)
+            "Likely a $name deposit address" -> tr("Likely a %s deposit address").replace("%s", name)
+            "Receives withdrawals from $name" -> tr("Receives withdrawals from %s").replace("%s", name)
+            else -> tr(how)
+        }
+}
 
 /** Lower-case address → platform. Only wallets publicly and widely labelled by block explorers. */
 private val KNOWN: Map<String, String> = buildMap {
@@ -88,25 +100,15 @@ private fun mentionsExchange(text: String, key: String) = EXCHANGE_WORDS[EXCHANG
 /** A wallet on an exchange holds the exchange's coins, not yours: it stays out of totals and its balance is hidden. */
 val SavedAddress.onExchange: Boolean get() = isExchangeWallet(address, group, name)
 /**
- * Why this address's balance may not be anyone's real balance: an exchange deposit address (the exchange moves the
- * coins on to its own wallets and keeps the person's balance in its own records), or an exchange's own wallet
- * (many users' coins together). Null for an ordinary wallet.
+ * The warning for a very busy address that isn't a known exchange wallet ([isBusyAddress]); null otherwise.
+ * Only asked when [exchangeIdentity] found no exchange: known exchange wallets, addresses in an exchange folder or
+ * named after one, and likely deposit addresses all get the exchange card instead.
  */
-fun exchangeNote(address: String, platform: Platform?, folder: String = "", name: String = "", sentTx: Long = 0): String? {
-    knownPlatform(address)?.let { return tr("%s's own wallet: it holds many users' coins together.").replace("%s", it) }
+fun exchangeNote(address: String, sentTx: Long): String? {
     // Thousands of sends can't be done by hand (a hardware wallet asks to confirm each one): a business or exchange wallet.
-    if (sentTx >= BUSY_SENDS) {
-        return tr("Very busy address (%d transactions sent): this is an exchange, company or bot wallet, not one person's.")
-            .replace("%d", java.text.NumberFormat.getIntegerInstance().format(sentTx))
-    }
-    val text = "$folder $name".lowercase()
-    val exchange = platform?.takeIf { it.how.startsWith("Likely") }?.name
-        ?: EXCHANGES.firstOrNull { mentionsExchange(text, it) }?.let { key ->
-            folder.takeIf { it.contains(key, ignoreCase = true) } ?: key.replaceFirstChar { it.uppercase() }
-        }
-        ?: return null
-    return tr("%s deposit address: the exchange moves the coins to its own wallets, so this isn't the account balance on %s.")
-        .replace("%s", exchange)
+    if (!isBusyAddress(address, sentTx)) return null
+    return tr("Very busy address (%d transactions sent): this is an exchange, company or bot wallet, not one person's.")
+        .replace("%d", java.text.NumberFormat.getIntegerInstance().format(sentTx))
 }
 
 /** How sure the app is that an address belongs to an exchange. Only the first two ever show the exchange's badge. */

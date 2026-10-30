@@ -76,9 +76,12 @@ fun ReleaseNotes(text: String, modifier: Modifier = Modifier, skipVersionHeading
     }
 }
 
+/** A markdown link: [text](url). */
+private val MD_LINK = Regex("""\[([^]]+)]\([^)]+\)""")
+
 /** **bold**, `code` and [link](url) → plain styled text. */
 private fun markdownLine(s: String): AnnotatedString {
-    val text = s.replace(Regex("""\[([^]]+)]\([^)]+\)"""), "$1").replace("`", "")
+    val text = s.replace(MD_LINK, "$1").replace("`", "")
     return buildAnnotatedString {
         text.split("**").forEachIndexed { i, part ->
             if (i % 2 == 1) withStyle(SpanStyle(fontWeight = FontWeight.SemiBold)) { append(part) } else append(part)

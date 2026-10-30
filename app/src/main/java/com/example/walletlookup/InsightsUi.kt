@@ -20,6 +20,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.material3.Card
@@ -90,16 +91,18 @@ fun SafetyCard(
     val badCheck = shown.firstOrNull { it.level == Level.BAD }
     val danger = twin != null || badCheck != null
     val verdict = when {
-        twin != null -> "Lookalike of your saved \"${twin.name}\""
+        twin != null -> tr("Lookalike of your saved %s").replace("%s", "\"${twin.name}\"")
         badCheck != null -> badCheck.title
-        savedWallet?.contact == true -> "Your contact · ${savedWallet.name}"
+        savedWallet?.contact == true -> tr("Your contact") + " · ${savedWallet.name}"
         // An exchange's wallet (or your deposit address there) isn't yours to spend from.
         savedWallet != null && savedWallet.onExchange -> tr("In your wallets") + " · ${savedWallet.name}"
         savedWallet != null -> "Your own wallet"
         safety == null && loading -> "Checking…"
         safety == null && error != null -> "Couldn't run the safety check"
         safety == null -> "Couldn't check right now"
-        safety.level == Level.WARN -> "New or unused address"
+        // A caution other than "never used" (e.g. "This is a smart contract") is the headline itself.
+        safety.level == Level.WARN -> shown.firstOrNull { it.level == Level.WARN && it.title != NO_ACTIVITY_TITLE }?.title
+            ?: "New or unused address"
         failures.isNotEmpty() -> "Some checks didn't run"
         else -> "No red flags found"
     }
@@ -128,7 +131,7 @@ fun SafetyCard(
         twin != null -> "Different address made to look like yours. Don't send money to it."
         danger -> "Reported as a scam or compromised. Don't send money to this address."
         notActivated -> "This address has never received or sent anything. Double-check it before sending money."
-        else -> platform?.let { tr("Platform:") + " " + it.how }
+        else -> platform?.let { tr("Platform:") + " " + it.display }
     }
     // What couldn't be checked and why, each as (what, reason).
     val problems = buildList {
@@ -236,6 +239,9 @@ private fun SafetyProblems(problems: List<Pair<String, String>>, retrying: Boole
     }
 }
 
+/** Title of the activity check's "never used" caution; that caution keeps the plain "New or unused address" headline. */
+private const val NO_ACTIVITY_TITLE = "No stablecoin transfers found"
+
 private fun icon(level: Level) = when (level) {
     Level.GOOD -> "✓"
     Level.INFO -> "i"
@@ -293,7 +299,13 @@ fun HistoryScreen(
                 kotlinx.coroutines.coroutineScope {
                     order.forEach { n ->
                         launch {
-                            val h = runCatching { history(address, setOf(n), limit) }.getOrNull().orEmpty()
+                            val h = try {
+                                history(address, setOf(n), limit)
+                            } catch (e: CancellationException) {
+                                throw e
+                            } catch (_: Exception) {
+                                emptyList()
+                            }
                             h.forEach { fresh[it.network] = it }
                             // Fresh networks replace their old copy; the rest stay until theirs arrive.
                             data = (data.orEmpty().filter { it.network !in fresh.keys } + fresh.values)
@@ -313,6 +325,8 @@ fun HistoryScreen(
         }
     }
 
+    // Kept here, above the transaction page, so Back from a transaction returns to the same place in the list.
+    val listState = rememberLazyListState()
     selected?.let { (network, t) ->
         TransactionScreen(
             network, t, names,
@@ -346,6 +360,7 @@ fun HistoryScreen(
             PullToRefreshBox(isRefreshing = loading, onRefresh = { reload++ }, modifier = Modifier.fillMaxSize()) {
                 LazyColumn(
                     Modifier.fillMaxSize(),
+                    state = listState,
                     contentPadding = PaddingValues(16.dp),
                     verticalArrangement = Arrangement.spacedBy(8.dp),
                 ) {
@@ -386,7 +401,8 @@ fun HistoryScreen(
                         }
                     }
                     // More transfers: fetch a bigger batch (each source has its own maximum).
-                    if (d != null && d.any { it.items.size >= 15 || it.canLoadMore } && limit < 200) {
+                    // Each source says whether a bigger page would add anything (a fixed-size one can't).
+                    if (d != null && d.any { it.canLoadMore } && limit < 200) {
                         item(key = "more") {
                             TextButton(onClick = { limit += 50; reload++ }, enabled = !loading, modifier = Modifier.fillMaxWidth()) {
                                 Text(if (loading) "Loading…" else "Load more")
@@ -542,7 +558,7 @@ internal fun TransactionScreen(
         Card(Modifier.fillMaxWidth().clickable { onOpenAddress(addr) }) {
             Column(Modifier.padding(14.dp)) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
-                    Text(label + (tag?.let { " · $it" } ?: ""), style = MaterialTheme.typography.labelMedium,
+                    Text(tr(label) + (tag?.let { " · $it" } ?: ""), style = MaterialTheme.typography.labelMedium,
                         color = MaterialTheme.colorScheme.onSurfaceVariant)
                     knownPlatform(addr)?.takeIf { names.labelFor(addr, network) == null }?.let {
                         Spacer(Modifier.width(6.dp))

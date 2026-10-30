@@ -81,7 +81,8 @@ fun folderColor(name: String): Color {
 /** Round badge for an exchange (a monogram in its brand colour). */
 @Composable
 fun ExchangeBadge(name: String, size: Dp) {
-    val b = BRANDS[name] ?: Brand(Color(0xFF616161), Color.White, name.take(1).uppercase())
+    // Some names carry a former name in brackets ("HTX (Huobi)"): the badge is under the main name.
+    val b = BRANDS[name] ?: BRANDS[name.substringBefore(" (")] ?: Brand(Color(0xFF616161), Color.White, name.take(1).uppercase())
     b.image?.let {
         androidx.compose.foundation.Image(androidx.compose.ui.res.painterResource(it), contentDescription = name,
             modifier = Modifier.size(size).clip(CircleShape))

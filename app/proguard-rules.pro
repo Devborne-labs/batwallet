@@ -7,7 +7,4 @@
 -keep class androidx.work.impl.** { *; }
 -keep class * extends androidx.work.ListenableWorker { <init>(...); }
 
-# Classes the manifest or system creates by name.
--keep class com.example.walletlookup.** extends android.app.Service { *; }
--keep class com.example.walletlookup.** extends android.content.BroadcastReceiver { *; }
--keep class com.example.walletlookup.BatApp { *; }
+# Services, receivers and the Application class named in the manifest are kept by the build itself (AAPT2's rules).

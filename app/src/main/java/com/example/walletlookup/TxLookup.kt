@@ -1,87 +1,166 @@
 package com.example.walletlookup
 
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeoutOrNull
 import org.json.JSONArray
 import org.json.JSONObject
+import java.io.IOException
 import java.math.BigDecimal
 import java.math.BigInteger
+import java.net.SocketTimeoutException
 import java.net.URLEncoder
 
 /** A transaction found by its ID: which network, what moved, and whether it went through. */
 data class TxInfo(val network: String, val transfer: Transfer, val status: String)
 
+/**
+ * What a search by transaction ID came to. [found] is set when a network has the transaction. Otherwise
+ * [unreachable] lists the networks that couldn't be asked (their lookup failed, or hadn't answered by the deadline),
+ * and [reason] says why the first of them failed in plain words ([failureReason]); null when every network answered.
+ */
+data class TxSearch(val found: TxInfo?, val unreachable: List<String>, val reason: String?)
+
 private val TRANSFER = TRANSFER_TOPIC.removePrefix("0x")
 
-private class EvmNet(val name: String, val rpc: String, val explorer: String, val coin: String)
-private val EVM_TX = listOf(
-    EvmNet("Ethereum", "https://ethereum-rpc.publicnode.com", "https://etherscan.io/tx/", "ETH"),
-    EvmNet("BSC", "https://bsc-rpc.publicnode.com", "https://bscscan.com/tx/", "BNB"),
-    EvmNet("Polygon", "https://polygon-bor-rpc.publicnode.com", "https://polygonscan.com/tx/", "POL"),
-    EvmNet("Arbitrum", "https://arb1.arbitrum.io/rpc", "https://arbiscan.io/tx/", "ETH"),
-    EvmNet("Optimism", "https://optimism-rpc.publicnode.com", "https://optimistic.etherscan.io/tx/", "ETH"),
-    EvmNet("Base", "https://base-rpc.publicnode.com", "https://basescan.org/tx/", "ETH"),
-    EvmNet("Avalanche", "https://avalanche-c-chain-rpc.publicnode.com", "https://snowtrace.io/tx/", "AVAX"),
-)
-
-/** Stablecoin contracts on the EVM networks above (lower-case address → symbol, decimals). */
-private val EVM_STABLES = mapOf(
-    "0xdac17f958d2ee523a2206206994597c13d831ec7" to ("USDT" to 6), "0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48" to ("USDC" to 6),
-    "0x55d398326f99059ff775485246999027b3197955" to ("USDT" to 18), "0x8ac76a51cc950d9822d68b83fe1ad97b32cd580d" to ("USDC" to 18),
-    "0xc2132d05d31c914a87c6611c10748aeb04b58e8f" to ("USDT" to 6), "0x3c499c542cef5e3811e1192ce70d8cc03d5c3359" to ("USDC" to 6),
-    "0xfd086bc7cd5c481dcc9c85ebe478a1c0b69fcbb9" to ("USDT" to 6), "0xaf88d065e77c8cc2239327c5edb3a432268e5831" to ("USDC" to 6),
-    "0x94b008aa00579c1307b0ef2c499ad98a8ce58e58" to ("USDT" to 6), "0x0b2c639c533813f4aa9d7837caf62653d097ff85" to ("USDC" to 6),
-    "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913" to ("USDC" to 6),
-    "0x9702230a8ea53601f5cd2dc00fdbc13d4df4a8c7" to ("USDT" to 6), "0xb97ef9ef8734c71904d8002f8b6bc66dd9c48a6e" to ("USDC" to 6),
-)
+/** How long a whole search may take. Networks that haven't answered by then count as unreachable. */
+private const val TX_DEADLINE_MS = 45_000L
 
 /** The lookups run here, so an answer shows as soon as one network has it while the others finish quietly. */
 private val txScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 
-/** Runs [lookups] at the same time and answers with the first that finds the transaction (null when none does). */
-private suspend fun firstFound(lookups: List<() -> TxInfo?>): TxInfo? {
-    val results = Channel<TxInfo?>(lookups.size)
-    lookups.forEach { l -> txScope.launch { results.send(runCatching { l() }.getOrNull()) } }
-    repeat(lookups.size) { results.receive()?.let { return it } }
-    return null
-}
+/** One network's lookup: the transaction, null when the network doesn't have it, or an exception when it couldn't be asked. */
+internal class TxCheck(val network: String, val find: () -> TxInfo?)
 
-/** Finds a transaction by its ID on every network that ID format could belong to. Null when none has it. */
-suspend fun lookupTx(raw: String): TxInfo? {
-    val h = raw.trim()
-    fun evm(hash: String): List<() -> TxInfo?> {
-        val chains: List<() -> TxInfo?> = EVM_TX.map { n -> { evmTx(n, hash) } }
-        return chains + listOf<() -> TxInfo?>({ aptosTx(hash) })
-    }
-    return when {
-        HEX64_0X.matches(h) -> firstFound(evm(h.lowercase()))
-        // 64 hex characters: Tron, Bitcoin, TON, Litecoin, or an EVM hash shown without its 0x. All asked at once.
-        HEX64.matches(h) -> h.lowercase().let { l ->
-            firstFound(listOf<() -> TxInfo?>(
-                { tronTx(l) },
-                { esploraTx("Bitcoin", "https://mempool.space/api", "BTC", "https://mempool.space/tx/", l) },
-                { tonTx(l) },
-                { esploraTx("Litecoin", "https://litecoinspace.org/api", "LTC", "https://litecoinspace.org/tx/", l) },
-            ) + evm("0x$l"))
+/**
+ * Runs [checks] at the same time and answers with the first that finds the transaction, or which networks failed.
+ * Networks still running after [deadlineMs] count as unreachable ("The service took too long to answer.").
+ */
+internal suspend fun searchTx(checks: List<TxCheck>, deadlineMs: Long = TX_DEADLINE_MS): TxSearch {
+    val answers = Channel<Pair<TxCheck, Result<TxInfo?>>>(checks.size)
+    checks.forEach { c ->
+        txScope.launch {
+            // find() blocks and never suspends. Anything it throws is kept as that network's failure: left uncaught
+            // here it would end the app.
+            val r = try {
+                Result.success(c.find())
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Throwable) {
+                Result.failure(e)
+            }
+            answers.send(c to r)
         }
-        SOL_SIGNATURE.matches(h) -> withContext(Dispatchers.IO) { runCatching { solanaTx(h) }.getOrNull() }
+    }
+    val pending = checks.toMutableList()
+    val failures = mutableListOf<Pair<String, Throwable>>()
+    // Cancelling the search (the dialog closed) cancels this wait too; only the deadline itself ends in null here.
+    val found = withTimeoutOrNull(deadlineMs) {
+        var hit: TxInfo? = null
+        while (hit == null && pending.isNotEmpty()) {
+            val (c, r) = answers.receive()
+            pending.remove(c)
+            r.fold(onSuccess = { hit = it }, onFailure = { failures += c.network to it })
+        }
+        hit
+    }
+    if (found != null) return TxSearch(found, emptyList(), null)
+    val first = failures.firstOrNull()?.second
+    val reason = when {
+        first != null -> failureReason(first as? Exception ?: Exception(first))
+        // Still waiting at the deadline: "The service took too long to answer."
+        pending.isNotEmpty() -> failureReason(SocketTimeoutException())
         else -> null
     }
+    return TxSearch(null, failures.map { it.first } + pending.map { it.network }, reason)
+}
+
+/**
+ * Finds a transaction by its ID on every network that ID format could belong to. [TxSearch.found] is null when none
+ * has it; then [TxSearch.unreachable] names the networks that couldn't be asked, so "not found" is only said for sure
+ * when every network answered.
+ */
+suspend fun lookupTx(raw: String): TxSearch {
+    val h = raw.trim()
+    // Every EVM network the app shows balances for (from EVM_CHAINS, so a new network is searched too), and Aptos,
+    // whose IDs look the same.
+    fun evm(hash: String): List<TxCheck> =
+        EVM_CHAINS.map { c -> TxCheck(c.name) { evmTx(c, hash) } } + TxCheck("Aptos") { aptosTx(hash) }
+    val checks = when {
+        HEX64_0X.matches(h) -> evm(h.lowercase())
+        // 64 hex characters: Tron, Bitcoin, TON, Litecoin, or an EVM hash shown without its 0x. All asked at once.
+        HEX64.matches(h) -> h.lowercase().let { l ->
+            listOf(
+                TxCheck("Tron") { tronTx(l) },
+                TxCheck("Bitcoin") { esploraTx("Bitcoin", "https://mempool.space/api", "BTC", "https://mempool.space/tx/", l) },
+                TxCheck("TON") { tonTx(l) },
+                TxCheck("Litecoin") { esploraTx("Litecoin", "https://litecoinspace.org/api", "LTC", "https://litecoinspace.org/tx/", l) },
+            ) + evm("0x$l")
+        }
+        SOL_SIGNATURE.matches(h) -> listOf(TxCheck("Solana") { solanaTx(h) })
+        else -> return TxSearch(null, emptyList(), null)
+    }
+    val r = searchTx(checks)
+    // Ethereum and Ethereum Classic share everything from before their 2016 split (same IDs): whichever answered
+    // first won. Such a transaction is Ethereum's, so ask Ethereum before settling on Ethereum Classic.
+    val found = r.found
+    if (found?.network == "Ethereum Classic") {
+        val eth = EVM_CHAINS.firstOrNull { it.name == "Ethereum" } ?: return r
+        val hash = if (h.startsWith("0x")) h.lowercase() else "0x" + h.lowercase()
+        val onEthereum = withContext(Dispatchers.IO) {
+            try {
+                evmTx(eth, hash)
+            } catch (e: CancellationException) {
+                throw e
+            } catch (_: Exception) {
+                null
+            }
+        }
+        if (onEthereum != null) return TxSearch(onEthereum, emptyList(), null)
+    }
+    return r
 }
 
 private fun hexNum(s: String?): BigInteger = s?.removePrefix("0x")?.ifEmpty { "0" }?.let { BigInteger(it, 16) } ?: BigInteger.ZERO
 
-private fun evmTx(n: EvmNet, h: String): TxInfo? {
-    fun rpc(method: String, params: JSONArray) = JSONObject(http(n.rpc,
-        JSONObject().put("jsonrpc", "2.0").put("id", 1).put("method", method).put("params", params).toString()))
+/** A GET whose 404 means "no such transaction here" (null), while any other failure throws. */
+private fun getUnlessMissing(url: String): String? = try {
+    http(url)
+} catch (e: IOException) {
+    if (e.message?.startsWith("HTTP 404") == true) null else throw e
+}
+
+/** Asks each of the network's RPCs in turn until one answers (a node that doesn't have it answers too: null). */
+private fun evmTx(c: EvmChain, h: String): TxInfo? {
+    var last: Exception? = null
+    for (url in c.rpcs) {
+        try {
+            return evmTxAt(c, url, h)
+        } catch (e: Exception) {
+            last = e
+        }
+    }
+    throw last ?: IOException("No RPC for ${c.name}")
+}
+
+private fun evmTxAt(c: EvmChain, url: String, h: String): TxInfo? {
+    fun rpc(method: String, params: JSONArray): JSONObject {
+        val r = JSONObject(http(url, JSONObject().put("jsonrpc", "2.0").put("id", 1).put("method", method).put("params", params).toString()))
+        // A refused call is a failure, not "no such transaction".
+        r.optJSONObject("error")?.let { throw IOException(it.optString("message")) }
+        return r
+    }
     val tx = rpc("eth_getTransactionByHash", JSONArray().put(h)).optJSONObject("result") ?: return null
     val receipt = rpc("eth_getTransactionReceipt", JSONArray().put(h)).optJSONObject("result")
     val status = when {
         receipt == null -> "Pending"
+        // Receipts from before Byzantium (2017; on Ethereum Classic until Atlantis) have no status: they went through.
+        receipt.isNull("status") -> "Confirmed"
         receipt.optString("status") == "0x1" -> "Confirmed"
         else -> "Failed"
     }
@@ -89,23 +168,44 @@ private fun evmTx(n: EvmNet, h: String): TxInfo? {
         runCatching { hexNum(rpc("eth_getBlockByNumber", JSONArray().put(b).put(false)).getJSONObject("result").optString("timestamp")).toLong() * 1000 }
             .getOrNull()
     } ?: 0L
-    // A stablecoin transfer inside the transaction, if there is one; otherwise the coin it sent.
+    val txUrl = c.explorer.replace("/address/", "/tx/") + h
+    // A stablecoin transfer inside the transaction (this network's own USDT/USDC contracts), if there is one;
+    // otherwise the coin it sent.
     val logs = receipt?.optJSONArray("logs") ?: JSONArray()
     for (i in 0 until logs.length()) {
         val l = logs.getJSONObject(i)
         val topics = l.optJSONArray("topics") ?: continue
         if (topics.length() != 3 || topics.getString(0).removePrefix("0x") != TRANSFER) continue
-        val (sym, dec) = EVM_STABLES[l.optString("address").lowercase()] ?: continue
+        val token = c.tokens.firstOrNull { it.contract.equals(l.optString("address"), ignoreCase = true) } ?: continue
         val from = "0x" + topics.getString(1).takeLast(40)
         val to = "0x" + topics.getString(2).takeLast(40)
-        return TxInfo(n.name, Transfer(true, amount(hexNum(l.optString("data")), dec), null, time, n.explorer + h, h, from, to, sym), status)
+        return TxInfo(c.name, Transfer(true, amount(hexNum(l.optString("data")), token.decimals), null, time, txUrl, h, from, to,
+            token.symbol.substringBefore(" (")), status)
     }
-    return TxInfo(n.name, Transfer(true, amount(hexNum(tx.optString("value")), 18), null, time, n.explorer + h, h,
-        tx.optString("from"), tx.optString("to").takeIf { it.isNotBlank() && it != "null" }, n.coin), status)
+    return TxInfo(c.name, Transfer(true, amount(hexNum(tx.optString("value")), 18), null, time, txUrl, h,
+        tx.optString("from"), tx.optString("to").takeIf { it.isNotBlank() && it != "null" }, c.sym), status)
 }
 
+/** An Aptos address without its 0x and leading zeros, so the short ("0x1") and long forms compare equal. */
+private fun aptosAddr(a: String): String = a.trim().lowercase().removePrefix("0x").trimStart('0')
+
+/** A Move name ("0x1::coin::transfer", a coin type) with its address written short, for exact comparisons. */
+private fun aptosName(name: String): String {
+    val addr = name.substringBefore("::", "")
+    if (!addr.startsWith("0x")) return name
+    return "0x" + aptosAddr(addr).ifEmpty { "0" } + "::" + name.substringAfter("::")
+}
+
+private const val APT_COIN = "0x1::aptos_coin::AptosCoin"
+
+/** Decimals of a token from one of its on-chain resources (null when they can't be read). */
+private fun aptosDecimals(account: String, resource: String): Int? = runCatching {
+    JSONObject(http("$APTOS_NODE/accounts/$account/resource/" + URLEncoder.encode(resource, "UTF-8")))
+        .getJSONObject("data").getInt("decimals")
+}.getOrNull()
+
 private fun aptosTx(h: String): TxInfo? {
-    val o = JSONObject(http("https://fullnode.mainnet.aptoslabs.com/v1/transactions/by_hash/$h"))
+    val o = JSONObject(getUnlessMissing("$APTOS_NODE/transactions/by_hash/$h") ?: return null)
     val status = when {
         o.optString("type") == "pending_transaction" -> "Pending"
         o.optBoolean("success", true) -> "Confirmed"
@@ -113,19 +213,32 @@ private fun aptosTx(h: String): TxInfo? {
     }
     val time = o.optString("timestamp").toLongOrNull()?.div(1000) ?: 0L
     val p = o.optJSONObject("payload")
-    val fn = p?.optString("function").orEmpty()
+    val fn = aptosName(p?.optString("function").orEmpty())
     val args = p?.optJSONArray("arguments") ?: JSONArray()
+    val typeArgs = p?.optJSONArray("type_arguments") ?: JSONArray()
     val from = o.optString("sender").takeIf { it.isNotBlank() }
     val url = "https://explorer.aptoslabs.com/txn/$h?network=mainnet"
-    val t = when {
-        fn.endsWith("primary_fungible_store::transfer") -> {
+    fun units(i: Int): BigInteger = args.optString(i).toBigIntegerOrNull() ?: BigInteger.ZERO
+    fun transfer(raw: BigInteger, decimals: Int, to: String?, symbol: String) =
+        Transfer(true, amount(raw, decimals), null, time, url, h, from, to?.takeIf { it.isNotBlank() }, symbol)
+    // Any other token is shown as "Token" (never its own name: anyone can call a token USDT). Its decimals are read
+    // from the chain; when they can't be, the amount is shown in the token's smallest units rather than guessed.
+    val t = when (fn) {
+        // Fungible assets (USDT on Aptos is one): metadata object, recipient, amount.
+        "0x1::primary_fungible_store::transfer", "0x1::aptos_account::transfer_fungible_assets" -> {
             val meta = args.optJSONObject(0)?.optString("inner") ?: args.optString(0)
-            val usdt = meta.equals(USDT_APTOS, true)
-            Transfer(true, amount(BigInteger(args.optString(2, "0")), if (usdt) 6 else 8), null, time, url, h, from, args.optString(1),
-                if (usdt) "USDT" else "Token")
+            if (aptosAddr(meta) == aptosAddr(USDT_APTOS)) transfer(units(2), 6, args.optString(1), "USDT")
+            else transfer(units(2), aptosDecimals(meta, "0x1::fungible_asset::Metadata") ?: 0, args.optString(1), "Token")
         }
-        fn.contains("aptos_account::transfer") || fn.endsWith("coin::transfer") ->
-            Transfer(true, amount(BigInteger(args.optString(1, "0")), 8), null, time, url, h, from, args.optString(0), "APT")
+        // APT: recipient, amount.
+        "0x1::aptos_account::transfer" -> transfer(units(1), 8, args.optString(0), "APT")
+        // A coin given in type_arguments: recipient, amount.
+        "0x1::aptos_account::transfer_coins", "0x1::coin::transfer" -> {
+            val coin = typeArgs.optString(0)
+            if (aptosName(coin) == APT_COIN) transfer(units(1), 8, args.optString(0), "APT")
+            else transfer(units(1), aptosDecimals(coin.substringBefore("::"), "0x1::coin::CoinInfo<$coin>") ?: 0,
+                args.optString(0), "Token")
+        }
         else -> Transfer(true, BigDecimal.ZERO, null, time, url, h, from, null, "APT")
     }
     return TxInfo("Aptos", t, status)
@@ -164,26 +277,39 @@ private fun tronTx(h: String): TxInfo? {
     return TxInfo("Tron", Transfer(true, amount(BigInteger.valueOf(v?.optLong("amount") ?: 0L), 6), null, time, url, h, from, to, "TRX"), status)
 }
 
+/**
+ * The payment among a transaction's outputs (address, amount in satoshis): one going to a saved wallet or contact
+ * if there is one, else the biggest that doesn't go back to a sender. On wallets that send change to a fresh
+ * address the biggest output can be the change, so a known address is the better sign of the payment. [inputs] are
+ * all the addresses the transaction spends from: change to any of them (even a saved one) is never the payment.
+ */
+internal fun paymentOutput(outputs: List<Pair<String?, Long>>, inputs: Set<String>, saved: List<String>): Pair<String?, Long>? {
+    val candidates = outputs.filter { it.first == null || it.first !in inputs }
+    val toSaved = candidates.filter { (address, _) -> address != null && saved.any { it.equals(address, ignoreCase = true) } }
+    return toSaved.ifEmpty { candidates }.maxByOrNull { it.second }
+}
+
 private fun esploraTx(name: String, base: String, sym: String, explorer: String, h: String): TxInfo? {
-    val o = JSONObject(http("$base/tx/$h"))
+    val o = JSONObject(getUnlessMissing("$base/tx/$h") ?: return null)
     val st = o.optJSONObject("status")
     val confirmed = st?.optBoolean("confirmed") == true
     val time = st?.optLong("block_time")?.takeIf { it > 0 }?.times(1000) ?: 0L
-    val from = o.optJSONArray("vin")?.optJSONObject(0)?.optJSONObject("prevout")?.optString("scriptpubkey_address")
-    // The payment is the biggest output that doesn't go back to the sender (the rest is change).
-    val outs = o.optJSONArray("vout") ?: JSONArray()
-    var best: JSONObject? = null
-    for (i in 0 until outs.length()) {
-        val v = outs.getJSONObject(i)
-        if (v.optString("scriptpubkey_address") == from) continue
-        if (best == null || v.optLong("value") > best.optLong("value")) best = v
+    val vin = o.optJSONArray("vin") ?: JSONArray()
+    val inputs = (0 until vin.length()).mapNotNull {
+        vin.optJSONObject(it)?.optJSONObject("prevout")?.optString("scriptpubkey_address")?.takeIf { a -> a.isNotEmpty() }
     }
-    return TxInfo(name, Transfer(true, amount(BigInteger.valueOf(best?.optLong("value") ?: 0L), 8), null, time, explorer + h, h,
-        from, best?.optString("scriptpubkey_address"), sym), if (confirmed) "Confirmed" else "Pending")
+    val from = inputs.firstOrNull()
+    val vout = o.optJSONArray("vout") ?: JSONArray()
+    val outputs = (0 until vout.length()).mapNotNull { vout.optJSONObject(it) }.map { v ->
+        v.optString("scriptpubkey_address").takeIf { it.isNotEmpty() } to v.optLong("value")
+    }
+    val best = paymentOutput(outputs, inputs.toSet(), lookalikeSource.map { rawAddress(it.address) })
+    return TxInfo(name, Transfer(true, amount(BigInteger.valueOf(best?.second ?: 0L), 8), null, time, explorer + h, h,
+        from, best?.first, sym), if (confirmed) "Confirmed" else "Pending")
 }
 
 private fun tonTx(h: String): TxInfo? {
-    val o = JSONObject(http("https://tonapi.io/v2/events/${URLEncoder.encode(h, "UTF-8")}"))
+    val o = JSONObject(getUnlessMissing("https://tonapi.io/v2/events/${URLEncoder.encode(h, "UTF-8")}") ?: return null)
     val actions = o.optJSONArray("actions") ?: return null
     val time = o.optLong("timestamp") * 1000
     val url = "https://tonviewer.com/transaction/$h"
@@ -205,8 +331,10 @@ private fun tonTx(h: String): TxInfo? {
 }
 
 private fun solanaTx(sig: String): TxInfo? {
+    // "confirmed", not the node's default "finalized": a transaction from the last few seconds is found too.
     val r = solanaCall("getTransaction", JSONArray().put(sig)
-        .put(JSONObject().put("encoding", "jsonParsed").put("maxSupportedTransactionVersion", 0))).optJSONObject("result") ?: return null
+        .put(JSONObject().put("encoding", "jsonParsed").put("maxSupportedTransactionVersion", 0).put("commitment", "confirmed")))
+        .optJSONObject("result") ?: return null
     val meta = r.optJSONObject("meta")
     val status = if (meta?.opt("err").let { it == null || it == JSONObject.NULL }) "Confirmed" else "Failed"
     val time = r.optLong("blockTime") * 1000
@@ -243,4 +371,3 @@ private fun solanaTx(sig: String): TxInfo? {
     }
     return TxInfo("Solana", Transfer(true, BigDecimal.ZERO, null, time, url, sig, key(0), null, "SOL"), status)
 }
-

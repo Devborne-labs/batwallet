@@ -62,8 +62,8 @@ val TIPS: Map<String, List<String>> = mapOf(
         "Tap a recent transaction to see who paid, who received, and follow the money.",
     ),
     "wallets" to listOf(
-        "Tap Add to save a wallet or a contact. Put wallets in folders like Binance or Trust Wallet.",
-        "Tap ⋯ → Edit order, then drag ≡ to put wallets and folders in your order.",
+        "Tap + to save a wallet or a contact. Put wallets in folders like Binance or Trust Wallet.",
+        "Hold a wallet or folder and drag it to change the order.",
         "Long-press a wallet to copy, see its QR, share, history or edit. Long-press a folder to rename it.",
         "Tap a folder name to fold it. Pull down to refresh balances.",
     ),

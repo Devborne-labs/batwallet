@@ -12,13 +12,28 @@ import android.graphics.Typeface
 import androidx.core.content.ContextCompat
 import androidx.core.content.FileProvider
 import androidx.core.content.res.ResourcesCompat
+import androidx.lifecycle.LifecycleOwner
+import androidx.lifecycle.lifecycleScope
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import java.io.File
+
+/** True while a share card is being made, so a second tap doesn't start another one. */
+@Volatile private var preparingShare = false
+
+/** For a share started from something that isn't a screen (normally the screen's own scope is used). */
+private val shareScope by lazy { CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate) }
 
 /**
  * Shares a wallet: the address, a branded QR card image and a link to see it on a block explorer.
- * Balances and tokens are deliberately left out.
+ * Balances and tokens are deliberately left out. Call from the main thread; the card is drawn and saved in the
+ * background, and the share sheet opens once it's ready.
  */
 fun shareWallet(context: Context, name: String?, address: String) {
+    if (preparingShare) return
     val raw = rawAddress(address)
     val network = labelOf(address)
     val link = explorerUrl(address)
@@ -34,15 +49,20 @@ fun shareWallet(context: Context, name: String?, address: String) {
         append("Shared with Batwallet")
     }
     val send = Intent(Intent.ACTION_SEND).putExtra(Intent.EXTRA_TEXT, text).putExtra(Intent.EXTRA_SUBJECT, name ?: "Wallet address")
-    val image = runCatching { qrCard(context, name, network, raw) }.getOrNull()
-    if (image != null) {
-        val uri = FileProvider.getUriForFile(context, context.packageName + ".files", image)
-        send.setType("image/png").putExtra(Intent.EXTRA_STREAM, uri).addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
-        send.clipData = ClipData.newRawUri("QR", uri)
-    } else {
-        send.setType("text/plain")
-    }
-    context.startActivity(Intent.createChooser(send, "Share wallet"))
+    preparingShare = true
+    val scope = (context as? LifecycleOwner)?.lifecycleScope ?: shareScope
+    scope.launch {
+        // A 1080×1400 image drawn and compressed: too slow for the main thread (the screen froze for a moment).
+        val image = withContext(Dispatchers.Default) { runCatching { qrCard(context, name, network, raw) }.getOrNull() }
+        if (image != null) {
+            val uri = FileProvider.getUriForFile(context, context.packageName + ".files", image)
+            send.setType("image/png").putExtra(Intent.EXTRA_STREAM, uri).addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+            send.clipData = ClipData.newRawUri("QR", uri)
+        } else {
+            send.setType("text/plain")
+        }
+        context.startActivity(Intent.createChooser(send, "Share wallet"))
+    }.invokeOnCompletion { preparingShare = false } // also when the screen closed first
 }
 
 /**

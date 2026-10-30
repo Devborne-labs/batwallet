@@ -147,7 +147,7 @@ fun DepositsCard(items: List<Triple<SavedAddress, String, Transfer>>) {
                     Column(Modifier.weight(1f)) {
                         Text(tr("Deposit to") + " $exchange · $net", fontWeight = FontWeight.Medium, maxLines = 1)
                         Text(if (ready) tr("Should be in your") + " $exchange " + tr("account now")
-                            else tr("Confirming") + " · " + tr("about") + " ${CREDIT_MINUTES[net] ?: 3} min",
+                            else tr("Confirming") + " · " + tr("about") + " ${CREDIT_MINUTES[net] ?: 3} " + tr("min"),
                             style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                     }
                     Text("+" + hideable(transferValue(t.amount, t.symbol)), fontWeight = FontWeight.SemiBold, color = InGreen)

@@ -108,6 +108,7 @@ import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.key
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
@@ -139,6 +140,7 @@ import androidx.fragment.app.FragmentActivity
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.lifecycleScope
+import androidx.lifecycle.repeatOnLifecycle
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Job
@@ -154,6 +156,13 @@ import androidx.compose.animation.core.tween
 import androidx.compose.ui.draw.alpha
 
 private const val AUTHENTICATORS = BIOMETRIC_WEAK or DEVICE_CREDENTIAL
+
+// Saved across a rotation or other configuration change (see MainActivity.onSaveInstanceState).
+private const val STATE_LOCKED = "locked"
+private const val STATE_CONFIG_CHANGE = "config_change"
+private const val STATE_SHARED = "shared"
+/** Back this soon from the app's own PIN screen and cancelling it there doesn't lock the app (it was just a cancel). */
+private const val AUTH_GRACE_MS = 60_000L
 
 // Batman palette: pure black (OLED) or white, a bat-signal gold accent, and a quiet slate card for the total.
 private val BatBlack = ComposeColor(0xFF000000)
@@ -216,6 +225,18 @@ private val LightBat: ColorScheme = lightColorScheme(
     error = ComposeColor(0xFFB3483D),
 )
 
+/**
+ * The lock as the last screen in this app process left it. Android can rebuild the screen while the app is in the
+ * background (dark mode, font size or language changed meanwhile); the rebuilt one carries on from here and the
+ * auto-lock time decides as usual. Once the process is closed this is gone, so a fresh start always locks.
+ */
+private object LockMemory {
+    @Volatile var known = false
+    @Volatile var locked = true
+    @Volatile var backgroundAt = 0L
+    @Volatile var screenWentOff = false
+}
+
 class MainActivity : FragmentActivity() {
     private lateinit var store: Store
     private var locked by mutableStateOf(false)
@@ -225,18 +246,30 @@ class MainActivity : FragmentActivity() {
     private var shared by mutableStateOf<String?>(null)
     private var authInProgress = false
     private var backgroundAt = 0L
+    /** The app left the screen while its own fingerprint/PIN prompt was open (e.g. for the phone's PIN screen). */
+    private var stoppedInAuth = false
+    /** Back from a long time on (or away from) that prompt: lock if it now ends without the fingerprint/PIN. */
+    private var relockIfCancelled = false
     private var screenWentOff = false
     private var receiverRegistered = false
     private val screenOffReceiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context, intent: Intent) {
-            if (lockEnabled && store.lockOnScreenOff) screenWentOff = true
+            if (lockEnabled && store.lockOnScreenOff) {
+                screenWentOff = true
+                LockMemory.screenWentOff = true
+            }
         }
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         store = Store(this)
-        shared = sharedText(intent)
+        // Recreated after a rotation (or other change): the shared text was already read from the intent and must not
+        // be handled twice; one still waiting (e.g. behind the lock screen) comes back from the saved state.
+        // Reopened from Recents after Back closed it: Android hands back the original share, already handled then.
+        val fromRecents = (intent.flags and Intent.FLAG_ACTIVITY_LAUNCHED_FROM_HISTORY) != 0
+        shared = if (savedInstanceState == null) sharedText(intent).takeUnless { fromRecents }
+            else savedInstanceState.getString(STATE_SHARED)
         I18n.load(this)
         historyPrefs = getSharedPreferences("history", MODE_PRIVATE)
         I18n.lang = store.language
@@ -246,7 +279,20 @@ class MainActivity : FragmentActivity() {
         fiat = store.currency
         fiatRate = store.currencyRate
         // The lock always covers the whole app (locking only Wallets left the total visible on Home).
-        locked = lockEnabled && canAuthenticate()
+        // A rotation keeps the lock as it was; any other new start (first launch, or the system had closed the app)
+        // locks, so nothing saved from an unlocked session can open it.
+        locked = when {
+            savedInstanceState != null && savedInstanceState.getBoolean(STATE_CONFIG_CHANGE) ->
+                savedInstanceState.getBoolean(STATE_LOCKED)
+            // Rebuilt in this same process while in the background: carry on as it was left; onStart then locks if
+            // the auto-lock time has passed or the screen went off.
+            savedInstanceState != null && LockMemory.known -> {
+                backgroundAt = LockMemory.backgroundAt
+                screenWentOff = LockMemory.screenWentOff
+                LockMemory.locked
+            }
+            else -> lockEnabled && canAuthenticate()
+        }
         lifecycleScope.launch { runCatching { weeklyUpdateCheck(applicationContext) } }
         SelfUpdate.cleanUp(this)
         etherscanKey = store.etherscanKey
@@ -278,18 +324,29 @@ class MainActivity : FragmentActivity() {
                 Box(Modifier.fillMaxSize()) {
                     App(
                         store = store,
-                        dark = dark,
                         themeMode = themeMode,
                         onThemeChange = { themeMode = it; store.theme = it },
                         lockAvailable = canAuthenticate(),
                         lockEnabled = lockEnabled,
-                        onLockChange = { lockEnabled = it; store.lockEnabled = it },
+                        // Turning the lock off (or relaxing it) asks for the fingerprint first, so whoever holds the
+                        // unlocked phone can't simply switch it off.
+                        onLockChange = { on ->
+                            if (on) { lockEnabled = true; store.lockEnabled = true }
+                            else confirm("Turn off fingerprint lock") { lockEnabled = false; store.lockEnabled = false }
+                        },
                         lockTimeout = lockTimeout,
-                        onLockTimeoutChange = { lockTimeout = it; store.lockTimeoutSec = it },
+                        onLockTimeoutChange = { sec ->
+                            if (sec <= lockTimeout) { lockTimeout = sec; store.lockTimeoutSec = sec }
+                            else confirm("Change auto-lock time") { lockTimeout = sec; store.lockTimeoutSec = sec }
+                        },
                         confirm = ::confirm,
                         shared = shared,
                         locked = locked,
-                        onSharedHandled = { shared = null },
+                        onSharedHandled = {
+                            shared = null
+                            // Handled: take it off the intent too, so nothing can read and handle it a second time.
+                            setIntent(Intent(intent).setAction(null))
+                        },
                     )
                     if (locked) LockScreen(onUnlock = ::authenticate)
                 }
@@ -314,11 +371,18 @@ class MainActivity : FragmentActivity() {
 
     override fun onStart() {
         super.onStart()
-        val relock = (screenWentOff && canAuthenticate()) ||
-            // Lock again if the app was in the background longer than the chosen auto-lock time.
-            (backgroundAt > 0 && lockEnabled && canAuthenticate() &&
-                SystemClock.elapsedRealtime() - backgroundAt >= lockTimeout * 1000L)
+        val away = SystemClock.elapsedRealtime() - backgroundAt
+        // Lock again if the app was in the background longer than the chosen auto-lock time.
+        val timedOut = backgroundAt > 0 && lockEnabled && canAuthenticate() && away >= lockTimeout * 1000L
+        // Back from the app's own PIN screen (its fingerprint prompt, e.g. to reveal balances, still open): that isn't
+        // leaving the app, so it doesn't lock now. How the prompt ends decides: the right PIN never locks; cancelling
+        // it after a long time locks (see confirm).
+        val ownPrompt = stoppedInAuth && authInProgress
+        val relock = (screenWentOff && canAuthenticate()) || (timedOut && !ownPrompt)
+        relockIfCancelled = timedOut && ownPrompt && away >= AUTH_GRACE_MS
         screenWentOff = false
+        LockMemory.screenWentOff = false
+        stoppedInAuth = false
         if (relock) locked = true
         backgroundAt = 0
     }
@@ -330,8 +394,25 @@ class MainActivity : FragmentActivity() {
 
     override fun onStop() {
         super.onStop()
-        // Remember when the app left the screen (but not while the fingerprint/PIN screen is showing).
-        if (!authInProgress && !isChangingConfigurations) backgroundAt = SystemClock.elapsedRealtime()
+        // Remember when the app left the screen, also while a fingerprint prompt is open (leaving during it, e.g. while
+        // revealing balances, must still lock). Not for a rotation.
+        if (!isChangingConfigurations) {
+            backgroundAt = SystemClock.elapsedRealtime()
+            stoppedInAuth = authInProgress
+            relockIfCancelled = false
+            // For a screen Android rebuilds while the app is in the background (see LockMemory).
+            LockMemory.known = true
+            LockMemory.locked = locked
+            LockMemory.backgroundAt = backgroundAt
+        }
+    }
+
+    override fun onSaveInstanceState(outState: Bundle) {
+        super.onSaveInstanceState(outState)
+        // Only a configuration change (rotation, dark mode…) restores the lock state; see onCreate.
+        outState.putBoolean(STATE_LOCKED, locked)
+        outState.putBoolean(STATE_CONFIG_CHANGE, isChangingConfigurations)
+        shared?.let { outState.putString(STATE_SHARED, it) }
     }
 
     /** Asks for the fingerprint (when the lock is on) before [onOk], e.g. to reveal hidden balances. */
@@ -341,13 +422,18 @@ class MainActivity : FragmentActivity() {
         BiometricPrompt(this, ContextCompat.getMainExecutor(this), object : BiometricPrompt.AuthenticationCallback() {
             override fun onAuthenticationSucceeded(result: BiometricPrompt.AuthenticationResult) {
                 authInProgress = false
+                relockIfCancelled = false
                 onOk()
             }
             override fun onAuthenticationError(errorCode: Int, errString: CharSequence) {
                 authInProgress = false
+                // The app was left long enough to lock while this prompt was open, and it ended without the
+                // fingerprint/PIN: lock now.
+                if (relockIfCancelled) locked = true
+                relockIfCancelled = false
             }
         }).authenticate(
-            BiometricPrompt.PromptInfo.Builder().setTitle(title).setAllowedAuthenticators(AUTHENTICATORS).build()
+            BiometricPrompt.PromptInfo.Builder().setTitle(tr(title)).setAllowedAuthenticators(AUTHENTICATORS).build()
         )
     }
 
@@ -361,6 +447,7 @@ class MainActivity : FragmentActivity() {
             object : BiometricPrompt.AuthenticationCallback() {
                 override fun onAuthenticationSucceeded(result: BiometricPrompt.AuthenticationResult) {
                     authInProgress = false
+                    relockIfCancelled = false
                     locked = false
                 }
                 override fun onAuthenticationError(errorCode: Int, errString: CharSequence) {
@@ -464,7 +551,6 @@ private fun ago(time: Long): String {
 @Composable
 private fun App(
     store: Store,
-    dark: Boolean,
     themeMode: ThemeMode,
     onThemeChange: (ThemeMode) -> Unit,
     lockAvailable: Boolean,
@@ -488,9 +574,24 @@ private fun App(
     var refresh by remember { mutableIntStateOf(0) }
     var loading by remember { mutableStateOf(false) }
     var results by remember { mutableStateOf<List<ChainResult>>(emptyList()) }
-    var resultsTime by remember { mutableStateOf<Long?>(null) }
+    // The address [results] belong to: another address's balances are never shown, checked or saved for this one.
+    var resultsFor by remember { mutableStateOf<String?>(null) }
+    // The address and refresh round whose lookup last finished: the checks wait for it, not for older balances.
+    var lookedUp by remember { mutableStateOf<Pair<String, Int>?>(null) }
+    // Counts lookups, so a cancelled one that ends late can't switch off the newer one's loading state.
+    val lookupRuns = remember { java.util.concurrent.atomic.AtomicInteger() }
+    // The same for the safety check: a cancelled earlier run (its blocking requests still finishing) mustn't switch off
+    // the spinner of the run that replaced it.
+    val safetyRuns = remember { java.util.concurrent.atomic.AtomicInteger() }
     var message by remember { mutableStateOf<String?>(null) }
-    var saved by remember { mutableStateOf(store.loadAddresses()) }
+    var saved by remember {
+        // One address saved twice (an older version could do it) crashes the Wallets list: keep the first, and save
+        // the cleaned list so the phone recovers.
+        val loaded = store.loadAddresses()
+        val unique = loaded.distinctBy { it.address }
+        if (unique.size != loaded.size) store.saveAddresses(unique)
+        mutableStateOf(unique)
+    }
     // Last synced balances of saved wallets, kept on the phone so they show instantly.
     var cache by remember {
         mutableStateOf(saved.mapNotNull { w -> store.loadCache(w.address)?.let { w.address to it } }.toMap())
@@ -503,6 +604,8 @@ private fun App(
     // Why the safety check couldn't run at all (shown with a Retry button), and the Retry counter that re-runs it.
     var safetyError by remember { mutableStateOf<String?>(null) }
     var safetyRetry by remember { mutableIntStateOf(0) }
+    // Set by Retry: run the checks again even when the saved ones are recent.
+    var safetyForce by remember { mutableStateOf(false) }
     var homeHistory by remember { mutableStateOf<List<History>?>(null) }
     var historyFor by remember { mutableStateOf<String?>(null) }
     var hidden by remember { mutableStateOf(store.hideBalances) }
@@ -512,7 +615,6 @@ private fun App(
     var recent by remember { mutableStateOf(store.loadRecentTimed()) }
     // Several addresses found in pasted/shared/scanned text (pick one), a transaction to look up, and the tools.
     var choices by remember { mutableStateOf<List<String>?>(null) }
-    var choicesFromPhoto by remember { mutableStateOf(false) }
     var choicesTx by remember { mutableStateOf<String?>(null) }
     var txCheckFor by remember { mutableStateOf<String?>(null) }
     var txInfo by remember { mutableStateOf<TxInfo?>(null) }
@@ -550,17 +652,17 @@ private fun App(
         if (a.isNotEmpty() && detect(a) == AddrType.EVM && netOf(a) == null) pendingEvm = a else address = canonical(a)
     }
     /**
-     * Pasted, shared or scanned text: one address opens straight away (from a photo you confirm it first),
-     * several let you pick, and a transaction ID is looked up. Returns false when nothing usable was found.
+     * Pasted, shared or scanned text: one address opens straight away, several let you pick, and a transaction ID
+     * is looked up. Returns false when nothing usable was found.
      */
-    fun handleText(text: String, fromPhoto: Boolean): Boolean {
+    fun handleText(text: String): Boolean {
         val found = extractAddresses(text)
         // 0x + 64 characters is both an Aptos address and an EVM transaction ID: let you choose.
         val maybeTx = found.singleOrNull()?.let(::rawAddress)?.takeIf { HEX64_0X.matches(it) }
         choicesTx = maybeTx
         when {
-            found.size == 1 && !fromPhoto && maybeTx == null -> openAddress(found[0])
-            found.isNotEmpty() -> { choices = found; choicesFromPhoto = fromPhoto }
+            found.size == 1 && maybeTx == null -> openAddress(found[0])
+            found.isNotEmpty() -> choices = found
             else -> {
                 val hash = text.split(Regex("[\\s,;]+")).firstOrNull { looksLikeTxHash(it) } ?: return false
                 txCheckFor = hash
@@ -575,7 +677,7 @@ private fun App(
         // Full-screen pages would cover the result, so shared text always lands on Home.
         scanning = false; txInfo = null; homeTx = null; historyFor = null
         tab = TAB_HOME
-        if (!handleText(text, fromPhoto = false)) {
+        if (!handleText(text)) {
             android.widget.Toast.makeText(context, tr("No wallet address found"), android.widget.Toast.LENGTH_SHORT).show()
         }
     }
@@ -639,13 +741,25 @@ private fun App(
         }
     }
 
-    fun updateSaved(list: List<SavedAddress>) { saved = list; store.saveAddresses(list) }
+    fun updateSaved(list: List<SavedAddress>) {
+        // Never the same address twice (two rows with one key crash the Wallets list).
+        val unique = list.distinctBy { it.address }
+        saved = unique
+        store.saveAddresses(unique)
+    }
 
     /** Edit a saved wallet in place. If its network changed, its saved balance starts fresh. */
     fun replaceWallet(old: SavedAddress, new: SavedAddress) {
+        // Picking a network changes the saved address (0x… → 0x…@BSC). Its logged payments on that network (all of
+        // them for "All networks") move to the new address instead of being wiped with the old one.
+        val keptLog = if (new.address != old.address && rawAddress(new.address).equals(rawAddress(old.address), true)) {
+            val net = netOf(new.address)
+            store.loadActivity(old.address).filter { net == null || it.network == net }
+        } else emptyList()
         updateSaved(saved.map { if (it.address == old.address) new.copy(pinned = old.pinned) else it })
         if (new.address != old.address) {
             store.forget(old.address)
+            if (keptLog.isNotEmpty()) store.saveActivity(new.address, keptLog)
             cache = cache - old.address
             if (!new.contact) scope.launch { sync(new.address) }
         }
@@ -660,7 +774,7 @@ private fun App(
         )
         if (isNew && !w.contact) {
             // Keep what's on screen as its first saved balance, or fetch it.
-            if (addr == address && results.isNotEmpty() && results.none { it.error != null }) remember(addr, results)
+            if (addr == address && resultsFor == addr && results.isNotEmpty() && results.none { it.error != null }) remember(addr, results)
             else scope.launch { sync(addr) }
             // Record starting balances right away so the first payment after saving is noticed.
             if (store.alertsEnabled) Alerts.checkNow(context)
@@ -680,8 +794,29 @@ private fun App(
     val recentForced = remember { java.util.concurrent.atomic.AtomicBoolean(true) }
     // Per wallet: when its history was last fetched, and the balances it had then (its cached results, as text).
     val recentFetched = remember { HashMap<String, Pair<Long, String>>() }
-    LaunchedEffect(Unit) {
-        while (true) { recentRequests.trySend(Unit); delay(3 * 60_000L) }
+    val lifecycle = LocalLifecycleOwner.current.lifecycle
+    // Every 3 minutes, only while Batwallet is on screen (not while it sits in Recents). The first round comes from
+    // opening the app (below) and from coming back to it (the ON_START observer).
+    LaunchedEffect(lifecycle) {
+        lifecycle.repeatOnLifecycle(Lifecycle.State.STARTED) {
+            while (true) { delay(3 * 60_000L); recentRequests.trySend(Unit) }
+        }
+    }
+    // Back to the app from the background: refresh every balance and all of Home's recent transactions once.
+    DisposableEffect(lifecycle) {
+        var stopped = false
+        val observer = LifecycleEventObserver { _, event ->
+            if (event == Lifecycle.Event.ON_STOP) {
+                stopped = true
+            } else if (event == Lifecycle.Event.ON_START && stopped) {
+                stopped = false
+                syncAll()
+                recentForced.set(true)
+                recentRequests.trySend(Unit)
+            }
+        }
+        lifecycle.addObserver(observer)
+        onDispose { lifecycle.removeObserver(observer) }
     }
     LaunchedEffect(saved.count { !it.contact && !it.archived }, recentForce) { recentForced.set(true); recentRequests.trySend(Unit) }
     LaunchedEffect(Unit) {
@@ -749,6 +884,8 @@ private fun App(
 
     // Today's change of the saved-wallets total, recalculated whenever balances update.
     LaunchedEffect(cache, saved, syncing.isEmpty()) {
+        // Not while wallets are syncing (each one finishing would restart it): it runs once they're all done.
+        if (syncing.isNotEmpty()) return@LaunchedEffect
         todayChange = try {
             dayChange(saved.filter { !it.contact && !it.archived && !it.onExchange }.flatMap { cache[it.address]?.results.orEmpty() })
         } catch (e: CancellationException) {
@@ -765,7 +902,7 @@ private fun App(
                 cache = cache + (addr to c)
                 if (addr == address && !loading) {
                     results = c.results
-                    resultsTime = c.time
+                    resultsFor = addr
                 }
             }
         }
@@ -774,7 +911,6 @@ private fun App(
     // While Batwallet is open, check for payments every 20 seconds whatever the alert mode, so they show up (and
     // notify) within seconds instead of after a pull-down. Only while it's on screen; background checks are the
     // alert mode's job. With alerts off it refreshes balances every minute instead.
-    val lifecycle = androidx.lifecycle.compose.LocalLifecycleOwner.current.lifecycle
     LaunchedEffect(Unit) {
         var rounds = 0
         while (true) {
@@ -804,7 +940,9 @@ private fun App(
                 store.saveRecentTx(recentTx)
             }
             val now = System.currentTimeMillis()
-            if (now - last > 20_000) {
+            // Only while Batwallet is on screen: in the background the alerts keep watch, and coming back to the app
+            // refreshes everything anyway.
+            if (now - last > 20_000 && lifecycle.currentState.isAtLeast(Lifecycle.State.STARTED)) {
                 last = now
                 recentForce++
                 syncAll()
@@ -815,27 +953,39 @@ private fun App(
 
     // Home: show the last saved result for this address at once, then fetch a fresh one.
     LaunchedEffect(address, refresh) {
+        val a = address
+        val round = refresh
         message = null
-        val t = detect(address) ?: run {
+        lookedUp = null
+        val t = detect(a) ?: run {
             results = emptyList()
-            resultsTime = null
-            if (address.isNotBlank()) message = "Not a supported address. Check that it was copied completely."
+            resultsFor = a
+            // No lookup for this one: the previous address's (cancelled, still finishing) is no longer the latest.
+            lookupRuns.incrementAndGet()
+            loading = false
+            if (a.isNotBlank()) message = "Not a supported address. Check that it was copied completely."
             return@LaunchedEffect
         }
-        val cached = cache[address]
-        if (refresh == 0 || results.isEmpty() || cached != null) {
-            results = cached?.results.orEmpty()
-            resultsTime = cached?.time
+        val cached = cache[a]
+        // Its saved balances show at once. Without them, a refresh of the same address keeps what's on screen, and a
+        // new address starts empty (never with the previous address's balances).
+        if (cached != null) {
+            results = cached.results
+            resultsFor = a
+        } else if (resultsFor != a) {
+            results = emptyList()
+            resultsFor = a
         }
-        if (cached == null) delay(400) // debounce typing
+        val thisRun = lookupRuns.incrementAndGet()
         loading = true
         try {
-            val merged = remember(address, lookup(address, t))
+            if (cached == null) delay(400) // debounce typing
+            val merged = remember(a, lookup(a, t))
             results = merged
-            if (merged.none { it.error != null }) resultsTime = System.currentTimeMillis()
+            resultsFor = a
             // Remember addresses you checked that aren't saved, for "Recently checked" on Home.
-            if (saved.none { it.address == address } && merged.any { it.error == null }) {
-                store.addRecent(address)
+            if (saved.none { it.address == a } && merged.any { it.error == null }) {
+                store.addRecent(a)
                 recent = store.loadRecentTimed()
             }
         } catch (e: CancellationException) {
@@ -843,30 +993,39 @@ private fun App(
         } catch (e: Exception) {
             message = if (results.isEmpty()) "Lookup failed: ${e.message}" else "Couldn't refresh. Showing last saved balances."
         } finally {
-            loading = false
+            if (lookupRuns.get() == thisRun) loading = false
         }
+        lookedUp = a to round
     }
 
-    // Home: other tokens for the searched address, once its balances are known.
+    // Home: other tokens for the searched address, once its own balances have loaded.
     LaunchedEffect(address, loading) {
-        if (tokensFor != address) { tokens = null; tokensFor = null }
-        if (loading || results.isEmpty() || detect(address) == null || tokensFor == address) return@LaunchedEffect
+        val a = address
+        if (tokensFor != a) { tokens = null; tokensFor = null }
+        if (loading || lookedUp?.first != a || resultsFor != a || results.isEmpty() || detect(a) == null || tokensFor == a) {
+            return@LaunchedEffect
+        }
         tokens = try {
-            otherTokens(address, results)
+            otherTokens(a, results)
         } catch (e: CancellationException) {
             throw e
         } catch (_: Exception) {
             null
         }
-        tokensFor = address
+        tokensFor = a
     }
 
-    // Home: safety check + recent history for the searched address. Runs once per address and waits for the
-    // balances (cached or fresh) so history only asks the networks where the wallet is used. It is keyed on the
+    // Home: safety check + recent history for the searched address. Runs once per address and waits for this
+    // address's own fresh balances so history only asks the networks where the wallet is used. It is keyed on the
     // address (and Retry) alone so a balance refresh finishing can't interrupt it halfway.
     LaunchedEffect(address, safetyRetry) {
+        val a = address
         safetyError = null
-        if (detect(address) == null) {
+        // Retry asked for it: run the checks again even when the saved ones are recent.
+        val force = safetyForce
+        safetyForce = false
+        val thisSafety = safetyRuns.incrementAndGet()
+        if (detect(a) == null) {
             safetyResult = null
             homeHistory = null
             safetyLoading = false
@@ -874,18 +1033,30 @@ private fun App(
         }
         // The saved check and history show at once. The check runs again when it's over 6 hours old or a part of it
         // couldn't run last time; the history (for the last-5 list) refreshes quietly in the background.
-        val saved = store.loadSafety(address)
-        val fresh = saved != null && saved.second.failed.isEmpty() && System.currentTimeMillis() - saved.first < 6 * 3_600_000L
+        val saved = store.loadSafety(a)
+        val fresh = !force && saved != null && saved.second.failed.isEmpty() &&
+            System.currentTimeMillis() - saved.first < 6 * 3_600_000L
         safetyResult = saved?.second
-        homeHistory = HistoryCache.load(address)
+        val savedHistory = HistoryCache.load(a)
+        homeHistory = savedHistory
         safetyLoading = !fresh
+        // The lookup running now (or the one Retry just started) must finish first, so the checks use this
+        // address's fresh balances, not the previous address's or the old partial ones.
+        val round = refresh
         try {
-            val ready = withTimeoutOrNull(60_000) { snapshotFlow { results.isNotEmpty() || (!loading && message != null) }.first { it } }
-            if (results.isNotEmpty()) {
-                val h = history(address, activeNetworks(results))
-                homeHistory = h
-                HistoryCache.save(address, h)
-                if (!fresh) safety(address, h).let { safetyResult = it; store.saveSafety(address, it) }
+            val ready = withTimeoutOrNull(60_000) {
+                snapshotFlow { !loading && lookedUp.let { it != null && it.first == a && it.second >= round } }.first { it }
+            }
+            val balances = if (resultsFor == a) results else emptyList()
+            if (balances.isNotEmpty()) {
+                val active = activeNetworks(balances)
+                val h = history(a, active)
+                // A network whose history didn't answer this time keeps its last saved transactions.
+                val before = savedHistory.orEmpty().associateBy { it.network }
+                val shown = h.map { n -> if (n.error != null) before[n.network] ?: n else n }
+                homeHistory = shown
+                HistoryCache.save(a, shown)
+                if (!fresh) safety(a, h, active.orEmpty()).let { safetyResult = it; store.saveSafety(a, it) }
             } else if (!fresh) {
                 safetyError = if (ready == null) "The balances took too long to load, so the checks couldn't start."
                     else "The balances didn't load, so the checks couldn't start."
@@ -895,73 +1066,8 @@ private fun App(
         } catch (e: Exception) {
             if (!fresh) safetyError = failureReason(e)
         } finally {
-            safetyLoading = false
+            if (safetyRuns.get() == thisSafety) safetyLoading = false
         }
-    }
-
-    if (scanning) {
-        ScannerScreen(
-            onResult = { scanning = false; if (!handleText(it, fromPhoto = false)) openAddress(cleanAddress(it)) },
-            onClose = { scanning = false },
-        )
-        return
-    }
-    txInfo?.let { info ->
-        SlideIn {
-            TransactionScreen(
-                info.network, info.transfer, addressNames,
-                onBack = { txInfo = null },
-                onOpenAddress = { a ->
-                    if (address.isNotEmpty()) trail = trail + address
-                    address = canonical(if (detect(a) == AddrType.EVM) withNet(a, info.network) else a)
-                    txInfo = null
-                    tab = TAB_HOME
-                },
-                onSaveContact = { a, n -> save(SavedAddress(n, if (detect(a) == AddrType.EVM) withNet(a, info.network) else a, contact = true)) },
-                neutral = true,
-                status = info.status,
-            )
-        }
-        return
-    }
-    homeTx?.let { (net, t) ->
-        SlideIn {
-        TransactionScreen(
-            net, t, addressNames,
-            onBack = { homeTx = null },
-            onOpenAddress = { a ->
-                if (address.isNotEmpty()) trail = trail + address
-                address = canonical(if (detect(a) == AddrType.EVM) withNet(a, net) else a)
-                homeTx = null
-                tab = TAB_HOME
-            },
-            onSaveContact = { a, n -> save(SavedAddress(n, if (detect(a) == AddrType.EVM) withNet(a, net) else a, contact = true)) },
-        )
-        }
-        return
-    }
-    historyFor?.let { addr ->
-        SlideIn {
-        HistoryScreen(
-            address = addr,
-            name = (saved.firstOrNull { it.address == addr }?.let(::walletLabel) ?: addressNames.labelFor(addr, netOf(addr))),
-            preloaded = if (addr == address) homeHistory else null,
-            networks = activeNetworks(cache[addr]?.results ?: if (addr == address) results else emptyList()),
-            names = addressNames,
-            balances = cache[addr]?.results ?: if (addr == address) results else emptyList(),
-            seen = remember(addr, cache) { store.loadActivity(addr) },
-            onClose = { historyFor = null },
-            onSaveContact = { a, net, n -> save(SavedAddress(n, if (detect(a) == AddrType.EVM) withNet(a, net) else a, contact = true)) },
-            onOpenAddress = { a, net ->
-                // Follow the money: open the other side of the transfer, remembering where we came from.
-                if (address.isNotEmpty()) trail = trail + address
-                address = canonical(if (detect(a) == AddrType.EVM) withNet(a, net) else a)
-                historyFor = null
-                tab = TAB_HOME
-            },
-        )
-        }
-        return
     }
 
     // A wallet opened from the Wallets tab is shown as a page on top of it; Back returns there.
@@ -987,16 +1093,17 @@ private fun App(
     }
 
     CompositionLocalProvider(LocalHidden provides hidden) {
+    Box(Modifier.fillMaxSize()) {
     Scaffold(
         bottomBar = {
             NavigationBar {
                 NavigationBarItem(selected = tab == TAB_HOME && !fromWallets, onClick = {
-                    if (fromWallets) { fromWallets = false; address = "" }
+                    if (fromWallets) { fromWallets = false; address = ""; trail = emptyList() }
                     tab = TAB_HOME
                 },
                     icon = { Icon(Icons.Filled.Home, contentDescription = null) }, label = { Text("Home") })
                 NavigationBarItem(selected = tab == TAB_WALLETS || fromWallets, onClick = {
-                    if (fromWallets) { fromWallets = false; address = "" }
+                    if (fromWallets) { fromWallets = false; address = ""; trail = emptyList() }
                     tab = TAB_WALLETS
                 },
                     icon = { Icon(Icons.AutoMirrored.Filled.List, contentDescription = null) }, label = { Text("Wallets") })
@@ -1019,7 +1126,7 @@ private fun App(
                 if (p == 1 || p == 2) walletsPage = p - 1
                 val t = when (p) { 0 -> TAB_HOME; 1, 2 -> TAB_WALLETS; else -> TAB_SETTINGS }
                 if (t != tab) {
-                    if (fromWallets) { fromWallets = false; address = "" }
+                    if (fromWallets) { fromWallets = false; address = ""; trail = emptyList() }
                     tab = t
                 }
             }
@@ -1049,11 +1156,10 @@ private fun App(
                     cache = cache,
                     syncing = syncing,
                     address = address,
-                    onAddress = { openAddress(it) },
                     loading = loading,
                     message = message,
-                    results = results,
-                    resultsTime = resultsTime,
+                    // Only this address's own balances (never the previous address's while the new ones load).
+                    results = if (resultsFor == address) results else emptyList(),
                     groups = groups,
                     onRefresh = { if (detect(address) != null) refresh++; recentForce++; syncAll() },
                     onSave = { w ->
@@ -1067,7 +1173,9 @@ private fun App(
                     safetyError = safetyError,
                     // Balances missing or a network didn't answer: fetch them again too, then re-run the checks.
                     onRetrySafety = {
-                        if (results.isEmpty() || results.any { it.error != null }) refresh++
+                        val own = if (resultsFor == address) results else emptyList()
+                        if (own.isEmpty() || own.any { it.error != null }) refresh++
+                        safetyForce = true
                         safetyRetry++
                     },
                     onHistory = { historyFor = address },
@@ -1084,12 +1192,11 @@ private fun App(
                     backLabel = if (trail.isNotEmpty()) "← Back" else if (fromWallets) "← Wallets" else "← Home",
                     onBack = { closeDetail() },
                     recent = recent.filter { r -> saved.none { it.address == r.first } },
-                    onPaste = { handleText(it, fromPhoto = false) },
+                    onPaste = { handleText(it) },
                     onCheckTx = { txCheckFor = "" },
                     onCompare = { comparing = true },
                     onSendCheck = { sendChecking = true },
                     onOpen = { address = it },
-                    onSeeAll = { tab = TAB_WALLETS },
                     platform = remember(address, homeHistory) { platformOf(address, homeHistory) },
                     // Also applied to the saved list, so sends from exchange wallets disappear straight away.
                     recentTx = recentTx.filter { (w, _, t) ->
@@ -1100,6 +1207,8 @@ private fun App(
                 )
                 1, 2 -> WalletsTab(
                     subPage = page - 1,
+                    // Only the page on screen may take Back (a selection on a page next to it mustn't swallow it).
+                    isCurrent = pager.settledPage == page,
                     onSubPage = { walletsPage = it },
                     // Between Wallets and Contacts only the list slides; the header stays put (see WalletsTab).
                     headerShift = {
@@ -1111,7 +1220,7 @@ private fun App(
                     syncing = syncing,
                     failed = failed,
                     onRefreshAll = { syncAll() },
-                    onPick = { address = it.address; fromWallets = true; tab = TAB_HOME },
+                    onPick = { address = it.address; trail = emptyList(); fromWallets = true; tab = TAB_HOME },
                     onHistory = { historyFor = it.address },
                     onReceive = { receiveFor = it },
                     onSave = { w ->
@@ -1182,13 +1291,14 @@ private fun App(
                     onOpenHandled = { settingsRequest = null },
                     lastBackup = lastBackup,
                     onBackedUp = { lastBackup = it },
-                    hidden = hidden,
-                    onHiddenChange = { hidden = it; store.hideBalances = it },
-                    onImport = { imported ->
+                    confirm = confirm,
+                    onImport = { imported, json ->
                         val known = saved.map { it.address }.toSet()
                         // A file that lists an address twice must not save it twice (two rows with one key crash the list).
                         val added = imported.filter { it.address !in known }.distinctBy { it.address }
                         updateSaved(saved + added)
+                        // The backup's folder order: yours stays, folders only the backup knew are added after it.
+                        groupOrder = store.importGroupOrder(json)
                         syncAll()
                         added.size
                     },
@@ -1198,10 +1308,83 @@ private fun App(
         }
         }
     }
+    // Full-screen pages (the scanner, a transaction, a history) are drawn over the tabs instead of replacing them, so
+    // the Wallets tab, Home's scroll and everything else are as you left them when you come back. The Surface is
+    // opaque and takes every touch; their Back handlers are added after the ones above, so Back closes them first.
+    val info = txInfo
+    val opened = homeTx
+    val historyAddress = historyFor
+    if (scanning || info != null || opened != null || historyAddress != null) Surface(Modifier.fillMaxSize()) {
+        when {
+            scanning -> ScannerScreen(
+                onResult = { scanning = false; if (!handleText(it)) openAddress(cleanAddress(it)) },
+                onClose = { scanning = false },
+            )
+            info != null -> SlideIn {
+                TransactionScreen(
+                    info.network, info.transfer, addressNames,
+                    onBack = { txInfo = null },
+                    onOpenAddress = { a ->
+                        if (address.isNotEmpty()) trail = trail + address
+                        address = canonical(if (detect(a) == AddrType.EVM) withNet(a, info.network) else a)
+                        txInfo = null
+                        tab = TAB_HOME
+                    },
+                    onSaveContact = { a, n -> save(SavedAddress(n, if (detect(a) == AddrType.EVM) withNet(a, info.network) else a, contact = true)) },
+                    neutral = true,
+                    status = info.status,
+                )
+            }
+            opened != null -> {
+                val (net, t) = opened
+                SlideIn {
+                    TransactionScreen(
+                        net, t, addressNames,
+                        onBack = { homeTx = null },
+                        onOpenAddress = { a ->
+                            if (address.isNotEmpty()) trail = trail + address
+                            address = canonical(if (detect(a) == AddrType.EVM) withNet(a, net) else a)
+                            homeTx = null
+                            tab = TAB_HOME
+                        },
+                        onSaveContact = { a, n -> save(SavedAddress(n, if (detect(a) == AddrType.EVM) withNet(a, net) else a, contact = true)) },
+                    )
+                }
+            }
+            historyAddress != null -> {
+                val addr = historyAddress
+                // Home's balances only when they are this address's own.
+                val own = if (addr == address && resultsFor == address) results else emptyList()
+                SlideIn {
+                    HistoryScreen(
+                        address = addr,
+                        name = (saved.firstOrNull { it.address == addr }?.let(::walletLabel) ?: addressNames.labelFor(addr, netOf(addr))),
+                        preloaded = if (addr == address) homeHistory else null,
+                        networks = activeNetworks(cache[addr]?.results ?: own),
+                        names = addressNames,
+                        balances = cache[addr]?.results ?: own,
+                        seen = remember(addr, cache) { store.loadActivity(addr) },
+                        onClose = { historyFor = null },
+                        onSaveContact = { a, net, n -> save(SavedAddress(n, if (detect(a) == AddrType.EVM) withNet(a, net) else a, contact = true)) },
+                        onOpenAddress = { a, net ->
+                            // Follow the money: open the other side of the transfer, remembering where we came from.
+                            if (address.isNotEmpty()) trail = trail + address
+                            address = canonical(if (detect(a) == AddrType.EVM) withNet(a, net) else a)
+                            historyFor = null
+                            tab = TAB_HOME
+                        },
+                    )
+                }
+            }
+        }
+    }
+    }
     receiveFor?.let { ReceiveDialog(it) { receiveFor = null } }
-    choices?.let { list ->
+    // Dialogs are windows above the lock screen's: these three can be opened by a result that arrives while locked
+    // (a QR code read from a photo), so they wait, kept as they are, until the app is unlocked.
+    if (!locked) choices?.let { list ->
         AddressChooser(
-            list, choicesFromPhoto, onPick = { choices = null; tab = TAB_HOME; openAddress(it) }, onDismiss = { choices = null },
+            list, onPick = { choices = null; tab = TAB_HOME; openAddress(it) }, onDismiss = { choices = null },
             txAlternative = choicesTx, onCheckTx = { choices = null; txCheckFor = it },
         )
     }
@@ -1213,8 +1396,16 @@ private fun App(
         if (justUpdated(context, saved.isNotEmpty())) whatsNew = releaseNotes(BatApp.appVersion(context))
     }
     if (!locked) whatsNew?.let { WhatsNewDialog(BatApp.appVersion(context), it) { whatsNew = null } }
-    txCheckFor?.let { initial ->
-        TxCheckDialog(initial, onFound = { txCheckFor = null; txInfo = it }, onDismiss = { txCheckFor = null })
+    // Open before the app locked: it stays (under the lock screen, which is a window above it), so its ID and search
+    // survive locking. One asked for while locked (e.g. after picking a photo) waits for unlock instead of opening
+    // above the lock screen.
+    var txOpenBeforeLock by remember { mutableStateOf<String?>(null) }
+    LaunchedEffect(locked, txCheckFor) { if (!locked) txOpenBeforeLock = txCheckFor }
+    if (!locked || txCheckFor == txOpenBeforeLock) txCheckFor?.let { initial ->
+        // A new ID (e.g. shared while the dialog is open) starts the dialog afresh, with that ID and its search.
+        key(initial) {
+            TxCheckDialog(initial, onFound = { txCheckFor = null; txInfo = it }, onDismiss = { txCheckFor = null })
+        }
     }
     if (comparing) CompareDialog { comparing = false }
     if (sendChecking) SendCheckDialog(onOpen = { sendChecking = false; tab = TAB_HOME; openAddress(it) }, onDismiss = { sendChecking = false })
@@ -1242,7 +1433,7 @@ private fun App(
             onSkipAll = { tipsSeen = TIPS.keys; store.tipsSeen = tipsSeen },
         )
     }
-    pendingEvm?.let { raw ->
+    if (!locked) pendingEvm?.let { raw ->
         NetworkPicker(onDismiss = { pendingEvm = null }) { net ->
             pendingEvm = null
             address = canonical(withNet(raw, net))
@@ -1258,11 +1449,9 @@ private fun HomeTab(
     cache: Map<String, Cached>,
     syncing: Set<String>,
     address: String,
-    onAddress: (String) -> Unit,
     loading: Boolean,
     message: String?,
     results: List<ChainResult>,
-    resultsTime: Long?,
     groups: List<String>,
     onRefresh: () -> Unit,
     onSave: (SavedAddress) -> Unit,
@@ -1293,7 +1482,6 @@ private fun HomeTab(
     backupDue: Int? = null,
     onOpenBackup: () -> Unit = {},
     onOpen: (String) -> Unit,
-    onSeeAll: () -> Unit,
     onClearRecent: () -> Unit,
     platform: Platform?,
     recentTx: List<Triple<String, String, Transfer>>,
@@ -1316,16 +1504,17 @@ private fun HomeTab(
             contentPadding = PaddingValues(start = 20.dp, end = 20.dp, top = 28.dp, bottom = 24.dp),
             verticalArrangement = Arrangement.spacedBy(16.dp),
         ) {
+            // Every item has a key, so each keeps its own state (e.g. "See all") when others appear or go.
             if (detail) {
-                item {
+                item(key = "back") {
                     TextButton(onClick = onBack, contentPadding = PaddingValues(0.dp)) { Text(backLabel) }
                 }
             } else {
-            item { TotalHeader(saved.filter { !it.contact && !it.archived && !it.onExchange }, cache, syncing, dayChange, onToggleHidden) }
+            item(key = "total") { TotalHeader(saved.filter { !it.contact && !it.archived && !it.onExchange }, cache, syncing, dayChange, onToggleHidden) }
             // A newer version found by the weekly check (or by Settings): one small line, tap to update.
-            if (newer != null) item { UpdateBanner(newer, onOpenUpdate) }
-            if (backupDue != null) item { BackupBanner(backupDue, onOpenBackup) }
-            item {
+            if (newer != null) item(key = "updateBanner") { UpdateBanner(newer, onOpenUpdate) }
+            if (backupDue != null) item(key = "backup") { BackupBanner(backupDue, onOpenBackup) }
+            item(key = "actions") {
                 Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                     // Tap: finds the address in whatever was copied (even a whole message), else shows recent checks.
                     // Long-press: always opens recent checks and the tools (check a transaction, compare addresses).
@@ -1355,10 +1544,10 @@ private fun HomeTab(
                         s.onExchange && knownPlatform(s.address) == null
                 }?.let { Triple(it, net, t) }
             }.take(3)
-            if (deposits.isNotEmpty()) item { DepositsCard(deposits) }
+            if (deposits.isNotEmpty()) item(key = "deposits") { DepositsCard(deposits) }
             val mine = saved.filter { !it.contact && !it.archived }
             if (recentTx.isNotEmpty()) {
-                item {
+                item(key = "recentTx") {
                     // Folder · name; the short address only when two of your wallets share that name.
                     // Folder · name; the saved name is enough (no shortened address).
                     val walletName: (String) -> String? = { w -> saved.firstOrNull { it.address == w }?.let(::walletLabel) }
@@ -1379,10 +1568,10 @@ private fun HomeTab(
                     }
                 }
             }
-            if (mine.isEmpty()) item { EmptyHint() }
+            if (mine.isEmpty()) item(key = "empty") { EmptyHint() }
             }
             if (address.isNotEmpty()) {
-                item {
+                item(key = "address") {
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         Column(Modifier.weight(1f)) {
                             Text(
@@ -1406,7 +1595,6 @@ private fun HomeTab(
                                 overflow = TextOverflow.MiddleEllipsis,
                             )
                         }
-                        if (!detail) TextButton(onClick = { onAddress("") }) { Text("Clear") }
                     }
                     if (type != null) {
                         Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(4.dp)) {
@@ -1421,7 +1609,7 @@ private fun HomeTab(
                 }
             }
             if (loading && results.isEmpty()) {
-                item {
+                item(key = "checking") {
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         CircularProgressIndicator(Modifier.size(18.dp), strokeWidth = 2.dp)
                         Spacer(Modifier.width(12.dp))
@@ -1429,37 +1617,39 @@ private fun HomeTab(
                     }
                 }
             }
-            message?.let { m -> item { Text(m, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall) } }
+            message?.let { m -> item(key = "message") { Text(m, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall) } }
             // Exchange identity (badge, name, balance warning) or, for a very busy business / bot address, a red
             // warning, shown above the balance so it's read first.
             val exchangeId = if (type != null && results.isNotEmpty())
                 exchangeIdentity(address, platform, savedWallet?.group.orEmpty(), savedWallet?.name.orEmpty()) else null
             if (exchangeId != null) {
-                item { ExchangeCard(exchangeId) }
+                item(key = "exchange:$address") { ExchangeCard(exchangeId) }
             } else if (type != null && results.isNotEmpty()) {
                 val sentTx = results.mapNotNull { r -> r.rows.firstOrNull { it.first == "Transactions sent" }?.second?.toLongOrNull() }.maxOrNull() ?: 0
-                exchangeNote(address, platform, savedWallet?.group.orEmpty(), savedWallet?.name.orEmpty(), sentTx)?.let { note ->
-                    item { WalletNote(note, warning = isBusyAddress(address, sentTx)) }
+                exchangeNote(address, sentTx)?.let { note ->
+                    item(key = "note:$address") { WalletNote(note, warning = isBusyAddress(address, sentTx)) }
                 }
             }
-            if (type != null && results.isNotEmpty()) item {
-                BalanceCard(type, results, resultsTime, loading,
+            // Keyed by address, so "Show anyway" on one exchange wallet doesn't stay open for the next one.
+            if (type != null && results.isNotEmpty()) item(key = "balance:$address") {
+                BalanceCard(type, results,
                     exchange = exchangeId != null || isExchangeWallet(address, savedWallet?.group.orEmpty(), savedWallet?.name.orEmpty()),
                     // An exchange's own wallet holds everyone's coins: its total is hidden until you ask for it.
                     hiddenAtFirst = exchangeId?.ownWallet == true || savedWallet?.onExchange == true)
             }
-            if (!tokens.isNullOrEmpty()) item { OtherTokensCard(tokens) }
+            if (!tokens.isNullOrEmpty()) item(key = "tokens:$address") { OtherTokensCard(tokens) }
             // Not activated: every network answered and none shows a balance or any activity.
             val unused = results.isNotEmpty() && results.all { it.error == null && !it.active }
             // Networks that didn't answer: a clean result would only be partial.
             val unanswered = results.filter { it.error != null }.map { it.network }
-            if (type != null) item {
+            // Keyed by address, so its open Details don't carry over to the next address.
+            if (type != null) item(key = "safety:$address") {
                 SafetyCard(safety, safetyLoading, twin, savedWallet, platform, unused, unanswered,
                     error = safetyError, retrying = loading || safetyLoading, onRetry = onRetrySafety)
             }
             // This address's last 5 transactions, and a button to its full history.
             val last5 = recentOf(address).take(5)
-            if (type != null && last5.isNotEmpty()) item {
+            if (type != null && last5.isNotEmpty()) item(key = "last5:$address") {
                 RecentTxSection(last5.map { (net, t) -> Triple(address, net, t) }, names = addressNames, walletName = { null },
                     onOpen = onOpenTx, title = "Recent transactions")
                 OutlinedButton(onClick = onHistory, modifier = Modifier.fillMaxWidth().padding(top = 10.dp)) { Text("See all transactions") }
@@ -1492,6 +1682,8 @@ private fun HomeTab(
             initial = savedWallet ?: SavedAddress("", address),
             addressEditable = false,
             groups = groups,
+            // The network chips can change the address: never onto one that's already saved.
+            existing = saved,
             onDismiss = { showSave = false },
             onConfirm = { onSave(it); showSave = false },
         )
@@ -1571,8 +1763,6 @@ private fun TotalHeader(
 private fun BalanceCard(
     type: AddrType,
     results: List<ChainResult>,
-    time: Long?,
-    loading: Boolean,
     exchange: Boolean = false,
     /** An exchange's own wallet: the total is folded away until "Show anyway" (it's everyone's coins together). */
     hiddenAtFirst: Boolean = false,
@@ -1607,7 +1797,8 @@ private fun BalanceCard(
                     color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
             sections.forEach { r ->
-                val shown = r.rows.drop(1).filter { (label, value) ->
+                // The total is shown above; a status-only result (BNB Beacon, Lightning, no EOS account) has no total row.
+                val shown = r.rows.filterNot { it.first == "Total value" }.filter { (label, value) ->
                     when {
                         label == "Status" -> true
                         label.startsWith("USDT") || label.startsWith("USDC") -> value != "0.00" || !multi && label.startsWith("USDT")
@@ -1655,6 +1846,8 @@ private fun BalanceCard(
 private fun WalletsTab(
     /** 0 = Wallets, 1 = Contacts (each is its own page of the main swipe row). */
     subPage: Int,
+    /** True while this page is the one on screen (only then may its selection take Back). */
+    isCurrent: Boolean,
     onSubPage: (Int) -> Unit,
     /**
      * How far this page is part-way towards the other of Wallets / Contacts (0 = settled, ±1 = fully the other).
@@ -1690,7 +1883,6 @@ private fun WalletsTab(
     onBulkDelete: (addresses: List<String>) -> Unit,
 ) {
     val context = LocalContext.current
-    val scope = rememberCoroutineScope()
     var adding by remember { mutableStateOf(false) }
     var editing by remember { mutableStateOf<SavedAddress?>(null) }
     var deleting by remember { mutableStateOf<SavedAddress?>(null) }
@@ -1706,7 +1898,8 @@ private fun WalletsTab(
     var movingSelected by remember { mutableStateOf(false) }
     var deletingSelected by remember { mutableStateOf(false) }
     val selecting = selected.isNotEmpty()
-    BackHandler(enabled = selecting) { selected = emptySet() }
+    // Only while this page is on screen: a selection left on the page next to it mustn't swallow Back.
+    BackHandler(enabled = selecting && isCurrent) { selected = emptySet() }
     val mine = saved.filter { !it.contact && !it.archived }
     val groups = mine.map { it.group }.filter { it.isNotBlank() }.distinct().sorted()
     val archivedCount = saved.count { it.archived }
@@ -1834,6 +2027,8 @@ private fun WalletsTab(
             run {
                 val p = subPage
                 val pg = pages[p]
+                // The search that actually filters the list (a leftover one, with the search box hidden, doesn't).
+                val activeQuery = if (pg.searchable) query.trim() else ""
                 val listState = rememberLazyListState()
                 val drag = remember(listState) { Reorder(listState) }
                 // While a row is held at the top or bottom edge, keep scrolling so it can go anywhere in the list.
@@ -1870,7 +2065,7 @@ private fun WalletsTab(
                             item(key = "group:$group") {
                                 var folderMenu by remember { mutableStateOf(false) }
                                 // Named folders move (not while searching or selecting); "Other" always stays last.
-                                val canDragFolder = !selecting && query.isEmpty() && pg.orderedNames.size > 1 && group in pg.orderedNames
+                                val canDragFolder = !selecting && activeQuery.isEmpty() && pg.orderedNames.size > 1 && group in pg.orderedNames
                                 val swapFolder: (String, String) -> Unit = { a, b ->
                                     adoptShownOrder(pg)
                                     onSwapGroups(a.removePrefix("group:"), b.removePrefix("group:"), pg.orderedNames)
@@ -1930,7 +2125,7 @@ private fun WalletsTab(
                                 val peers = inOrder.filter { it.pinned == item.pinned }.map { it.address }
                                 fun toggle() { selected = if (item.address in selected) selected - item.address else selected + item.address }
                                 val swapRow: (String, String) -> Unit = { a, b -> adoptShownOrder(pg); onSwap(a, b) }
-                                val canDrag = !selecting && query.isEmpty() && peers.size > 1
+                                val canDrag = !selecting && activeQuery.isEmpty() && peers.size > 1
                                 WalletRow(
                                     if (drag.key == item.address) Modifier.dragged(drag, item.address) else Modifier.animateItem(),
                                     item, c,
@@ -2009,7 +2204,13 @@ private fun WalletsTab(
             title = { Text("Rename folder") },
             text = { OutlinedTextField(value = text, onValueChange = { text = it }, singleLine = true, label = { Text("Folder name") }) },
             confirmButton = {
-                TextButton(onClick = { onRenameGroup(old, text.trim()); renaming = null },
+                TextButton(onClick = {
+                    val new = text.trim()
+                    onRenameGroup(old, new)
+                    // A folded folder stays folded under its new name.
+                    collapsed = collapsed.map { if (it == old) new else it }.toSet()
+                    renaming = null
+                },
                     enabled = text.isNotBlank() && text.trim() != old) { Text("Save") }
             },
             dismissButton = { TextButton(onClick = { renaming = null }) { Text("Cancel") } },
@@ -2381,9 +2582,10 @@ private fun SettingsTab(
     onOpenHandled: () -> Unit,
     lastBackup: Long,
     onBackedUp: (Long) -> Unit,
-    hidden: Boolean,
-    onHiddenChange: (Boolean) -> Unit,
-    onImport: (List<SavedAddress>) -> Int,
+    /** Asks for the fingerprint (when the lock is on) before relaxing a lock setting. */
+    confirm: (String, () -> Unit) -> Unit,
+    /** The wallets read from a backup, and the backup's text (for its folder order). Returns how many were new. */
+    onImport: (List<SavedAddress>, String) -> Int,
     saved: List<SavedAddress>,
 ) {
     val context = LocalContext.current
@@ -2391,14 +2593,51 @@ private fun SettingsTab(
     var keyText by remember { mutableStateOf(store.etherscanKey) }
     var savedKey by remember { mutableStateOf(store.etherscanKey) }
     val scope = rememberCoroutineScope()
+    // Switching currency: its exchange rate loads first; the old currency stays until it has.
+    // The currency whose rate is loading (shown on its row).
+    var pendingCurrency by remember { mutableStateOf<Fiat?>(null) }
+    fun pickCurrency(f: Fiat) {
+        if (f == fiat || pendingCurrency != null) return
+        // USD and USDT need no rate.
+        if (f == Fiat.USD || f == Fiat.USDT) {
+            fiat = f; fiatRate = 1.0; store.currency = f; store.currencyRate = 1.0
+            return
+        }
+        pendingCurrency = f
+        // In the screen's scope, not this page's: leaving Settings mustn't cancel the switch halfway.
+        ((context as? androidx.lifecycle.LifecycleOwner)?.lifecycleScope ?: scope).launch {
+            try {
+                val rate = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) { fetchFiatRate(f.code) }
+                if (rate != null) {
+                    // Currency and rate change together, so amounts are never shown (or saved) with another currency's rate.
+                    fiat = f; fiatRate = rate; store.currency = f; store.currencyRate = rate
+                } else {
+                    android.widget.Toast.makeText(context, tr("Couldn't load the exchange rate. Try again when you're online."),
+                        android.widget.Toast.LENGTH_SHORT).show()
+                }
+            } finally {
+                pendingCurrency = null
+            }
+        }
+    }
     // Backup with an optional password: the file content is prepared (and encrypted) first, then saved.
     var askExport by remember { mutableStateOf(false) }
     var exportContent by remember { mutableStateOf<String?>(null) }
+    // Whether that content is password-protected (kept through a restart, unlike the content itself).
+    var exportLocked by rememberSaveable { mutableStateOf(false) }
     var lockedImport by remember { mutableStateOf<String?>(null) } // a password-protected backup waiting for its password
     val exporter = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("application/json")) { uri ->
-        val content = exportContent
+        val prepared = exportContent
         exportContent = null
-        if (uri == null || content == null) return@rememberLauncherForActivityResult
+        if (uri == null) return@rememberLauncherForActivityResult
+        // Android closed the app while the save screen was open, so the prepared content is gone: a plain backup is
+        // simply made again; a password-protected one can't be (the password is gone too).
+        val content = prepared ?: if (exportLocked) null else store.exportJson()
+        if (content == null) {
+            // Never leave the new file empty without a word.
+            backupMessage = tr("Export was interrupted. Please export again.")
+            return@rememberLauncherForActivityResult
+        }
         backupMessage = try {
             context.contentResolver.openOutputStream(uri)?.use { it.write(content.toByteArray()) }
             System.currentTimeMillis().let { store.lastBackup = it; onBackedUp(it) }
@@ -2410,7 +2649,7 @@ private fun SettingsTab(
     fun restore(text: String) {
         backupMessage = try {
             val list = parseBackup(text)
-            val added = onImport(list)
+            val added = onImport(list, text)
             parseBackupKey(text).takeIf { it.isNotEmpty() && savedKey.isEmpty() }?.let { k ->
                 store.etherscanKey = k; etherscanKey = k; keyText = k; savedKey = k
             }
@@ -2478,9 +2717,11 @@ private fun SettingsTab(
         }
         SettingGroup("Currency", fiat.label, open == "currency", { toggle("currency") }) {
             // USDT first; the usual currencies below it.
-            RadioRow(fiat == Fiat.USDT, Fiat.USDT.label) { fiat = Fiat.USDT; store.currency = Fiat.USDT }
+            RadioRow(fiat == Fiat.USDT, Fiat.USDT.label) { pickCurrency(Fiat.USDT) }
             Label("Other currencies")
-            Fiat.entries.filter { it != Fiat.USDT }.forEach { f -> RadioRow(f == fiat, f.label) { fiat = f; store.currency = f } }
+            Fiat.entries.filter { it != Fiat.USDT }.forEach { f ->
+                RadioRow(f == fiat, f.label + if (pendingCurrency == f) " · " + tr("Loading…") else "") { pickCurrency(f) }
+            }
         }
         }
         SettingsSection("Alerts & security") {
@@ -2542,7 +2783,11 @@ private fun SettingsTab(
             if (lockEnabled && lockAvailable) {
                 Label("Lock again after")
                 ChipRow(LOCK_TIMES, lockTimeout, onLockTimeoutChange)
-                SwitchRow("Lock on screen off", null, screenOffLock) { screenOffLock = it; store.lockOnScreenOff = it }
+                SwitchRow("Lock on screen off", null, screenOffLock) { on ->
+                    // Turning it off relaxes the lock: fingerprint first.
+                    if (on) { screenOffLock = true; store.lockOnScreenOff = true }
+                    else confirm("Turn off lock on screen off") { screenOffLock = false; store.lockOnScreenOff = false }
+                }
             }
         }
         }
@@ -2608,6 +2853,7 @@ private fun SettingsTab(
                             val json = store.exportJson()
                             exportContent = if (pw.isEmpty()) json
                             else kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Default) { BackupCrypto.encrypt(json, pw) }
+                            exportLocked = pw.isNotEmpty()
                             busy = false
                             askExport = false
                             exporter.launch(if (pw.isEmpty()) "batwallet-backup.json" else "batwallet-backup-locked.json")
