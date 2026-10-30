@@ -25,7 +25,6 @@ import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
-import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
@@ -35,7 +34,6 @@ import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Icon
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Refresh
-import androidx.compose.material3.pulltorefresh.PullToRefreshBox
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -149,7 +147,7 @@ fun SafetyCard(
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Box(Modifier.size(36.dp).background(tint.copy(alpha = 0.22f), CircleShape), contentAlignment = Alignment.Center) {
                     // The not-activated "!" shows straight away; it doesn't wait for the safety check.
-                    if (loading && safety == null && !notActivated && !partial) CircularProgressIndicator(Modifier.size(16.dp), strokeWidth = 2.dp, color = tint)
+                    if (loading && safety == null && !notActivated && !partial) BatSpinner(size = 16.dp, color = tint)
                     else Text(symbol, color = tint, fontWeight = FontWeight.Bold, style = MaterialTheme.typography.titleMedium)
                 }
                 Spacer(Modifier.width(12.dp))
@@ -225,7 +223,7 @@ private fun SafetyProblems(problems: List<Pair<String, String>>, retrying: Boole
         if (onRetry != null) {
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End, verticalAlignment = Alignment.CenterVertically) {
                 if (retrying) {
-                    CircularProgressIndicator(Modifier.size(16.dp), strokeWidth = 2.dp)
+                    BatSpinner(size = 16.dp)
                     Spacer(Modifier.width(8.dp))
                     Text("Checking again…", style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 } else {
@@ -393,7 +391,7 @@ fun HistoryScreen(
                 }
             }
             HorizontalDivider()
-            PullToRefreshBox(isRefreshing = loading, onRefresh = { reload++ }, modifier = Modifier.fillMaxSize()) {
+            BatPullToRefresh(isRefreshing = loading, onRefresh = { reload++ }, modifier = Modifier.fillMaxSize()) {
                 LazyColumn(
                     Modifier.fillMaxSize(),
                     state = listState,
@@ -662,7 +660,7 @@ internal fun TransactionScreen(
                         Row(Modifier.padding(16.dp), verticalAlignment = Alignment.Top) {
                             if (stale) Text("i", fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.onSurfaceVariant,
                                 modifier = Modifier.padding(horizontal = 6.dp))
-                            else CircularProgressIndicator(Modifier.padding(top = 2.dp).size(18.dp), strokeWidth = 2.dp)
+                            else BatSpinner(Modifier.padding(top = 2.dp), size = 18.dp)
                             Spacer(Modifier.width(12.dp))
                             Column {
                                 Text(if (stale) "Details not available" else "Finding the transaction details",

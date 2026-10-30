@@ -13,7 +13,6 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.AlertDialog
-import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.TextButton
@@ -129,7 +128,7 @@ fun TxCheckDialog(initial: String = "", onFound: (TxInfo) -> Unit, onDismiss: ()
                     Text("Paste")
                 }
                 if (busy) Row(verticalAlignment = Alignment.CenterVertically) {
-                    CircularProgressIndicator(Modifier.size(16.dp), strokeWidth = 2.dp)
+                    BatSpinner(size = 16.dp)
                     Spacer(Modifier.width(10.dp))
                     Text("Searching…", color = MaterialTheme.colorScheme.onSurfaceVariant)
                 }
@@ -240,7 +239,7 @@ fun SendCheckDialog(onOpen: (String) -> Unit, onDismiss: () -> Unit) {
                 TextButton(onClick = { clipboard.getText()?.text?.trim()?.let { input = it; lines = null; check() } },
                     contentPadding = androidx.compose.foundation.layout.PaddingValues(0.dp)) { Text("Paste") }
                 if (busy) Row(verticalAlignment = Alignment.CenterVertically) {
-                    CircularProgressIndicator(Modifier.size(16.dp), strokeWidth = 2.dp)
+                    BatSpinner(size = 16.dp)
                     Spacer(Modifier.width(10.dp))
                     Text("Checking…", color = MaterialTheme.colorScheme.onSurfaceVariant)
                 }

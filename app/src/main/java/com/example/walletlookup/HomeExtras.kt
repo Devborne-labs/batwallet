@@ -2,7 +2,6 @@ package com.example.walletlookup
 
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.LaunchedEffect
-import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.foundation.layout.size
 import androidx.compose.animation.animateContentSize
 import androidx.compose.foundation.background
@@ -143,7 +142,7 @@ fun DepositsCard(items: List<Triple<SavedAddress, String, Transfer>>) {
                 val ready = now - t.time >= (CREDIT_MINUTES[net] ?: 3) * 60_000L
                 Row(verticalAlignment = androidx.compose.ui.Alignment.CenterVertically) {
                     if (ready) Text("✓", color = InGreen, fontWeight = FontWeight.Bold, modifier = Modifier.width(24.dp))
-                    else CircularProgressIndicator(Modifier.padding(end = 8.dp).size(16.dp), strokeWidth = 2.dp)
+                    else BatSpinner(Modifier.padding(end = 8.dp), size = 16.dp)
                     Column(Modifier.weight(1f)) {
                         Text(tr("Deposit to") + " $exchange · $net", fontWeight = FontWeight.Medium, maxLines = 1)
                         Text(if (ready) tr("Should be in your") + " $exchange " + tr("account now")

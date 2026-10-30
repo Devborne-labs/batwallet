@@ -84,11 +84,9 @@ import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
-import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ColorScheme
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilterChip
-import androidx.compose.material3.pulltorefresh.PullToRefreshBox
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
@@ -1498,7 +1496,9 @@ private fun HomeTab(
     var showSave by remember { mutableStateOf(false) }
     var showRecent by remember { mutableStateOf(false) }
 
-    PullToRefreshBox(isRefreshing = loading || syncing.isNotEmpty(), onRefresh = onRefresh, modifier = Modifier.fillMaxSize()) {
+    // The total card shows "Updating…" itself, so on the overview the pull sign only follows the finger; an opened
+    // address shows it while its own balances load (not while other wallets sync in the background).
+    BatPullToRefresh(isRefreshing = detail && loading, onRefresh = onRefresh, modifier = Modifier.fillMaxSize()) {
         LazyColumn(
             modifier = Modifier.fillMaxSize(),
             contentPadding = PaddingValues(start = 20.dp, end = 20.dp, top = 28.dp, bottom = 24.dp),
@@ -1611,7 +1611,7 @@ private fun HomeTab(
             if (loading && results.isEmpty()) {
                 item(key = "checking") {
                     Row(verticalAlignment = Alignment.CenterVertically) {
-                        CircularProgressIndicator(Modifier.size(18.dp), strokeWidth = 2.dp)
+                        BatSpinner(size = 18.dp)
                         Spacer(Modifier.width(12.dp))
                         Text("Checking…", color = MaterialTheme.colorScheme.onSurfaceVariant)
                     }
@@ -1746,12 +1746,16 @@ private fun TotalHeader(
                 }
             }
         }
-        // Top right: "Updating…" while balances load, "Updated just now" for a moment after.
-        Text(
-            if (busy) tr("Updating…") else tr("Updated just now"),
-            style = MaterialTheme.typography.labelSmall, color = ComposeColor.White.copy(alpha = 0.72f),
-            modifier = Modifier.align(Alignment.TopEnd).alpha(statusAlpha),
-        )
+        // Top right: the gold spinner and "Updating…" while balances load, then "✓ Updated just now" for a moment.
+        Row(Modifier.align(Alignment.TopEnd).alpha(statusAlpha), verticalAlignment = Alignment.CenterVertically) {
+            if (busy) BatSpinner(size = 13.dp, color = BatGold)
+            else Text("✓", style = MaterialTheme.typography.labelSmall, fontWeight = FontWeight.Bold, color = HeroUp)
+            Spacer(Modifier.width(6.dp))
+            Text(
+                if (busy) tr("Updating…") else tr("Updated just now"),
+                style = MaterialTheme.typography.labelSmall, color = ComposeColor.White.copy(alpha = 0.72f),
+            )
+        }
     }
 }
 
@@ -2023,7 +2027,7 @@ private fun WalletsTab(
             }
         }
 
-        PullToRefreshBox(isRefreshing = syncing.isNotEmpty(), onRefresh = onRefreshAll, modifier = Modifier.fillMaxSize()) {
+        BatPullToRefresh(isRefreshing = syncing.isNotEmpty(), onRefresh = onRefreshAll, modifier = Modifier.fillMaxSize()) {
             run {
                 val p = subPage
                 val pg = pages[p]
@@ -2295,7 +2299,7 @@ private fun WalletRow(
                 Text(hideable(fmt2(cached.totals.usdt)) + " USDT", style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
-            syncing -> CircularProgressIndicator(Modifier.size(16.dp), strokeWidth = 2.dp)
+            syncing -> BatSpinner(size = 16.dp)
             failed -> Text("—", color = MaterialTheme.colorScheme.error)
             else -> Text("—", color = MaterialTheme.colorScheme.onSurfaceVariant)
         }
@@ -2914,7 +2918,7 @@ private fun SettingsTab(
             val latest = result
             when {
                 checking -> Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(top = 8.dp)) {
-                    CircularProgressIndicator(Modifier.size(16.dp), strokeWidth = 2.dp)
+                    BatSpinner(size = 16.dp)
                     Spacer(Modifier.width(10.dp))
                     Text("Checking…", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 }
@@ -2964,7 +2968,7 @@ private fun SettingsTab(
                             else releaseNotes(current) ?: ""
                         }
                         when (val n = notes) {
-                            null -> CircularProgressIndicator(Modifier.padding(top = 8.dp).size(16.dp), strokeWidth = 2.dp)
+                            null -> BatSpinner(Modifier.padding(top = 8.dp), size = 16.dp)
                             "" -> Text("Couldn't reach GitHub. Try again later.", style = MaterialTheme.typography.bodySmall,
                                 color = MaterialTheme.colorScheme.error)
                             else -> ReleaseNotes(n, Modifier.padding(vertical = 8.dp).heightIn(max = 320.dp)
