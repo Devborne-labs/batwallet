@@ -1496,9 +1496,14 @@ private fun HomeTab(
     var showSave by remember { mutableStateOf(false) }
     var showRecent by remember { mutableStateOf(false) }
 
-    // The total card shows "Updating…" itself, so on the overview the pull's gap closes again after a moment; an opened
-    // address keeps it open until its own balances have loaded (not while other wallets sync in the background).
-    BatPullToRefresh(isRefreshing = detail && loading, onRefresh = onRefresh, modifier = Modifier.fillMaxSize()) {
+    // On the overview the total card is the one "Updating…" sign, so the pull's dots only fill while pulling. An opened
+    // address keeps them rippling in the gap until its own balances have loaded.
+    BatPullToRefresh(
+        isRefreshing = if (detail) loading else syncing.isNotEmpty(),
+        onRefresh = onRefresh,
+        modifier = Modifier.fillMaxSize(),
+        ownStatus = !detail,
+    ) {
         LazyColumn(
             modifier = Modifier.fillMaxSize(),
             contentPadding = PaddingValues(start = 20.dp, end = 20.dp, top = 28.dp, bottom = 24.dp),
