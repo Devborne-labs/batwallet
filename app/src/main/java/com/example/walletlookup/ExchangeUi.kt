@@ -53,6 +53,31 @@ private val BRANDS = mapOf(
     "Bitget" to Brand(Color(0xFF00F0FF), Color(0xFF0B0B0B), "BG"),
 )
 
+/** Brand colours for folders named after an exchange or wallet app (matched anywhere in the name, any case). */
+private val FOLDER_BRANDS = listOf(
+    "binance" to Color(0xFFF0B90B), "bybit" to Color(0xFFF7A600), "okx" to Color(0xFF9E9E9E), "coinbase" to Color(0xFF0052FF),
+    "kraken" to Color(0xFF5741D9), "kucoin" to Color(0xFF23AF91), "bitfinex" to Color(0xFF16B157), "gemini" to Color(0xFF00DCFA),
+    "htx" to Color(0xFF2B66F6), "huobi" to Color(0xFF2B66F6), "gate" to Color(0xFF2354E6), "crypto.com" to Color(0xFF3B82F6),
+    "mexc" to Color(0xFF1972F5), "bitget" to Color(0xFF00F0FF), "bingx" to Color(0xFF2A54FF), "bitmart" to Color(0xFF3B8BFF),
+    "upbit" to Color(0xFF2D6CDF), "wazirx" to Color(0xFF3067F0), "coindcx" to Color(0xFF2E7CF6),
+    "trust" to Color(0xFF3375BB), "metamask" to Color(0xFFF6851B), "ledger" to Color(0xFFFF5300), "phantom" to Color(0xFFAB9FF2),
+    "tonkeeper" to Color(0xFF45AEF5), "exodus" to Color(0xFF1F7CF6), "safepal" to Color(0xFF4A21EF), "trezor" to Color(0xFF00854D),
+)
+
+/** Colours for every other folder, one per name (the same folder always gets the same colour). */
+private val FOLDER_PALETTE = listOf(
+    Color(0xFF8B7CFF), Color(0xFF3B8BF6), Color(0xFF2EBD85), Color(0xFFF5A623), Color(0xFFEC4899),
+    Color(0xFF19B5A5), Color(0xFFF97316), Color(0xFFA855F7), Color(0xFF06B6D4), Color(0xFFF6465D),
+)
+
+/** A folder's colour: its exchange's or wallet app's brand colour when the name says which, else one picked by the name. */
+fun folderColor(name: String): Color {
+    if (name.isBlank()) return Color(0xFF8A8A8A)
+    val n = name.lowercase()
+    FOLDER_BRANDS.firstOrNull { (key, _) -> n.contains(key) }?.let { return it.second }
+    return FOLDER_PALETTE[Math.floorMod(name.hashCode(), FOLDER_PALETTE.size)]
+}
+
 /** Round badge for an exchange (a monogram in its brand colour). */
 @Composable
 fun ExchangeBadge(name: String, size: Dp) {

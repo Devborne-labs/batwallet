@@ -87,6 +87,25 @@ class LogicTest {
         assertEquals(null, detect("0x123"))
     }
 
+    @Test fun sharedContractConstantsAgree() {
+        // Transaction lookup derives the hex form of the USDT contract from the shared T… address.
+        assertEquals("a614f803b6fd780986a42c78ec9c7f77e6ded13c", tronHex(USDT_TRC20))
+    }
+
+    @Test fun findsAddressesAndNetworkInPastedText() {
+        val found = extractAddresses("Send USDT (BEP20) to 0x3f5CE5FBFe3E9af3971dD833D26bA9b5C936f0bE please,\nor TRC20: TGSNahJvAdh86aR5pdcxiep1mBWSRK3HHL.")
+        assertEquals(listOf("0x3f5CE5FBFe3E9af3971dD833D26bA9b5C936f0bE@BSC", "TGSNahJvAdh86aR5pdcxiep1mBWSRK3HHL"), found)
+        assertEquals("Polygon", networkHint("send on polygon"))
+        assertEquals(null, networkHint("hello there"))
+        assertEquals("0x3f5CE5FBFe3E9af3971dD833D26bA9b5C936f0bE",
+            cleanAddress("ethereum:0xdAC17F958D2ee523a2206206994597C13D831ec7@1/transfer?address=0x3f5CE5FBFe3E9af3971dD833D26bA9b5C936f0bE&uint256=1"))
+        assertEquals("1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa", cleanAddress("bitcoin:1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa?amount=0.1"))
+        assertEquals("UQCD39VS5jcptHL8vMjEXrzGaRcCVYto7HUn4bpAOg8xqEBI", cleanAddress("ton://transfer/UQCD39VS5jcptHL8vMjEXrzGaRcCVYto7HUn4bpAOg8xqEBI"))
+        assertTrue(looksLikeTxHash("0x" + "ab".repeat(32)))
+        assertTrue(looksLikeTxHash("ab".repeat(32)))
+        assertFalse(looksLikeTxHash("0x3f5CE5FBFe3E9af3971dD833D26bA9b5C936f0bE"))
+    }
+
     @Test fun versionComparison() {
         assertTrue(isNewerVersion("19.10", "19.9"))
         assertTrue(isNewerVersion("20.0", "19.2"))

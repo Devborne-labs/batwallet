@@ -31,7 +31,6 @@ data class History(
     val network: String,
     val items: List<Transfer> = emptyList(),
     val note: String? = null,
-    val fullHistoryUrl: String? = null,
     val error: String? = null,
     /** False when this network has no in-app history (only a note is shown). */
     val supported: Boolean = true,
@@ -42,10 +41,8 @@ data class History(
 /** Optional free Etherscan API key (Settings). Its free plan covers Ethereum and some networks, not BSC/Base/Polygon/Arbitrum. */
 @Volatile var etherscanKey: String = ""
 
-private const val USDT_TRC20_ADDR = "TR7NHqjeKQxGTCi8q8ZY4pL8otSzgjLj6t"
-private const val USDT_APTOS_META = "0x357b0b74bc833e95a115ad22604854d6b0fca151cecd94111770e5d6ffc9dc2b"
-private const val USDT_TON_MASTER = "EQCxE6mUtQJKFnGfaROTKOt1lZbDiiX1kCixRv7Nw2Id_sDs"
-private const val TRANSFER_TOPIC = "0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef"
+/** The ERC-20 Transfer event, which every stablecoin transfer on an EVM network emits. */
+internal const val TRANSFER_TOPIC = "0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef"
 /**
  * How many transfers to fetch per network ("Load more" raises it). Set per request and carried along with it (also
  * into its parallel parts), so Home's checks and an open History page can't change each other's count.
@@ -92,8 +89,15 @@ suspend fun history(raw: String, networks: Set<String>? = null, limit: Int = 25)
 suspend fun findTransfers(raw: String, network: String, symbol: String, change: java.math.BigDecimal, time: Long): List<Transfer> =
     withContext(Dispatchers.IO) {
         val a = rawAddress(raw)
-        val c = EVM_HIST.firstOrNull { it.name == network && it.chainId in LOG_NODES && it.symbol.equals(symbol, true) }
-        val candidates = if (c != null && detect(a) == AddrType.EVM) runCatching { logWindow(c, a, time) }.getOrNull()
+        val evm = detect(a) == AddrType.EVM
+        val node = EVM_HIST.firstOrNull { it.name == network && it.chainId in LOG_NODES }
+        // The stablecoin's contract on this network: the one its history lists, else the other one from the balance list.
+        val token = node?.let { h ->
+            if (h.symbol.equals(symbol, true)) Triple(h.token, h.decimals, h.symbol)
+            else EVM_CHAINS.firstOrNull { it.name == network }?.tokens?.firstOrNull { it.symbol.startsWith(symbol, ignoreCase = true) }
+                ?.let { Triple(it.contract, it.decimals, symbol.uppercase()) }
+        }
+        val candidates = if (evm && node != null && token != null) runCatching { logWindow(node, a, time, token.first, token.second, token.third) }.getOrNull()
         // Plain TRX (Tron's own coin): the Tron history only lists USDT, so ask for coin transfers directly.
         else if (network == "Tron" && symbol.equals("TRX", true)) runCatching { tronCoinWindow(a, time) }.getOrNull()
         // BNB / ETH / POL: from the free coin-transfer lists (Binplorer, Ethplorer, Routescan, Blockscout).
@@ -224,8 +228,11 @@ fun pickTransfers(candidates: List<Transfer>, change: java.math.BigDecimal, time
     return emptyList()
 }
 
-/** Every transfer of the token in and out of [a] from 3 hours before [time] to 15 minutes after. */
-private fun logWindow(c: EvmHist, a: String, time: Long): List<Transfer> {
+/** Every transfer of the [token] in and out of [a] from 3 hours before [time] to 15 minutes after. */
+private fun logWindow(
+    c: EvmHist, a: String, time: Long,
+    token: String = c.token, decimals: Int = c.decimals, symbol: String = c.symbol,
+): List<Transfer> {
     val node = LOG_NODES.getValue(c.chainId)
     val me = "0x" + a.removePrefix("0x").lowercase().padStart(64, '0')
     fun call(id: Int, method: String, params: JSONArray) =
@@ -251,7 +258,7 @@ private fun logWindow(c: EvmHist, a: String, time: Long): List<Transfer> {
                 val topics = if (incoming) JSONArray().put(TRANSFER_TOPIC).put(JSONObject.NULL).put(me) else JSONArray().put(TRANSFER_TOPIC).put(me)
                 batch.put(call(id++, "eth_getLogs", JSONArray().put(JSONObject()
                     .put("fromBlock", "0x" + r.first.toString(16)).put("toBlock", "0x" + r.last.toString(16))
-                    .put("address", c.token).put("topics", topics))))
+                    .put("address", token).put("topics", topics))))
             }
         }
         val resp = JSONArray(node.post(batch.toString(), step))
@@ -272,8 +279,8 @@ private fun logWindow(c: EvmHist, a: String, time: Long): List<Transfer> {
         val incoming = t.equals(a, ignoreCase = true)
         val hash = l.getString("transactionHash")
         val ts = times.getOrPut(block) { runCatching { blockTime(block) * 1000 }.getOrDefault(0L) }
-        Transfer(incoming, amount(BigInteger(l.getString("data").removePrefix("0x").ifEmpty { "0" }, 16), c.decimals),
-            if (incoming) f else t, ts, c.txBase + hash, hash, f, t, c.symbol)
+        Transfer(incoming, amount(BigInteger(l.getString("data").removePrefix("0x").ifEmpty { "0" }, 16), decimals),
+            if (incoming) f else t, ts, c.txBase + hash, hash, f, t, symbol)
     }
 }
 
@@ -294,7 +301,14 @@ private suspend fun historyRaw(raw: String, networks0: Set<String>?): List<Histo
                 lookup(a, AddrType.EVM, withPrices = false).filter { it.active && it.error == null }.map { it.network }.toSet()
             }.getOrNull()
             val chains = EVM_HIST.filter { used == null || it.name in used }
-            if (chains.isEmpty()) return@withContext listOf(History("EVM", supported = true))
+            if (chains.isEmpty()) {
+                // Pinned to a network without a history source (VeChain, Ethereum Classic): say so, not "no transfers".
+                val only = networks?.singleOrNull()?.takeIf { n -> EVM_HIST.none { it.name == n } }
+                return@withContext listOf(
+                    if (only != null) History(only, supported = false, note = "History for $only isn't available in the app yet.")
+                    else History("EVM", supported = true)
+                )
+            }
             chains.map { c ->
                 async(Dispatchers.IO) {
                     safeHistory(c.name) {
@@ -602,7 +616,7 @@ private fun logHistory(c: EvmHist, a: String, maxRequests: Int = 4 + (LIMIT - 25
 }
 
 private fun tronHistory(a: String): History {
-    val j = JSONObject(http("https://api.trongrid.io/v1/accounts/$a/transactions/trc20?limit=$LIMIT&contract_address=$USDT_TRC20_ADDR"))
+    val j = JSONObject(http("https://api.trongrid.io/v1/accounts/$a/transactions/trc20?limit=$LIMIT&contract_address=$USDT_TRC20"))
     val arr = j.optJSONArray("data") ?: JSONArray()
     val items = (0 until arr.length()).map { i ->
         val o = arr.getJSONObject(i)
@@ -623,6 +637,7 @@ private fun tronHistory(a: String): History {
 }
 
 private const val APT_COIN = "0x1::aptos_coin::AptosCoin"
+private val APTOS_ARG = Regex("0x[0-9a-fA-F]{1,64}")
 
 /**
  * Aptos's free indexer allows each phone only a little work per few minutes, and Home now checks every few
@@ -644,7 +659,7 @@ private fun aptosCached(a: String): History {
 private fun aptosHistory(raw: String): History {
     val a = "0x" + raw.removePrefix("0x").lowercase().padStart(64, '0')
     // USDT plus APT itself (as the old coin type and as its newer fungible-asset form, 0xa).
-    val assets = """["$USDT_APTOS_META", "$APT_COIN", "0xa"]"""
+    val assets = """["$USDT_APTOS", "$APT_COIN", "0xa"]"""
     val query = """
         query { fungible_asset_activities(
             where: { owner_address: { _eq: "$a" }, asset_type: { _in: $assets }, is_transaction_success: { _eq: true } },
@@ -684,7 +699,7 @@ private fun aptosHistory(raw: String): History {
             else {
                 val args = t.optJSONObject("payload")?.optJSONArray("arguments") ?: return@runCatching null
                 (0 until args.length()).map { args.opt(it) }.filterIsInstance<String>()
-                    .firstOrNull { it.matches(Regex("0x[0-9a-fA-F]{1,64}")) && it != a && it != USDT_APTOS_META }
+                    .firstOrNull { APTOS_ARG.matches(it) && it != a && it != USDT_APTOS }
             }
         }.getOrNull()
     }
@@ -694,7 +709,7 @@ private fun aptosHistory(raw: String): History {
         // "…::Deposit" for fungible assets, "…::DepositEvent" for the old coin type; gas fees are neither.
         val incoming = type.contains("Deposit")
         if (!incoming && !type.contains("Withdraw")) return@mapNotNull null
-        val usdt = o.optString("asset_type") == USDT_APTOS_META
+        val usdt = o.optString("asset_type") == USDT_APTOS
         val version = o.get("transaction_version").toString()
         // Money in came from whoever withdrew in the same transaction; money out went to whoever received it.
         val other = others[version]?.firstOrNull { (_, t) -> if (incoming) t.contains("Withdraw") else t.contains("Deposit") }?.first
@@ -714,7 +729,7 @@ private fun aptosHistory(raw: String): History {
 private fun tonHistory(a: String): History {
     val enc = URLEncoder.encode(a, "UTF-8")
     val me = JSONObject(http("https://tonapi.io/v2/accounts/$enc")).getString("address").lowercase()
-    val j = JSONObject(http("https://tonapi.io/v2/accounts/$enc/jettons/$USDT_TON_MASTER/history?limit=${minOf(LIMIT, 100)}"))
+    val j = JSONObject(http("https://tonapi.io/v2/accounts/$enc/jettons/$USDT_TON/history?limit=${minOf(LIMIT, 100)}"))
     val events = j.getJSONArray("events")
     val items = mutableListOf<Transfer>()
     for (i in 0 until events.length()) {
@@ -866,7 +881,7 @@ private fun tetherFreeze(a: String, type: AddrType): Check? = try {
         }
         AddrType.TRON -> {
             val body = JSONObject()
-                .put("owner_address", a).put("contract_address", USDT_TRC20_ADDR)
+                .put("owner_address", a).put("contract_address", USDT_TRC20)
                 .put("function_selector", "isBlackListed(address)")
                 .put("parameter", tronHex(a).padStart(64, '0')).put("visible", true)
             val res = JSONObject(http("https://api.trongrid.io/wallet/triggerconstantcontract", body.toString()))
@@ -877,7 +892,7 @@ private fun tetherFreeze(a: String, type: AddrType): Check? = try {
             val addr = "0x" + a.removePrefix("0x").lowercase().padStart(64, '0')
             val body = JSONObject().put("function", "0x1::primary_fungible_store::is_frozen")
                 .put("type_arguments", JSONArray().put("0x1::fungible_asset::Metadata"))
-                .put("arguments", JSONArray().put(addr).put(USDT_APTOS_META))
+                .put("arguments", JSONArray().put(addr).put(USDT_APTOS))
             JSONArray(http("https://fullnode.mainnet.aptoslabs.com/v1/view", body.toString())).getBoolean(0)
         }
         else -> null

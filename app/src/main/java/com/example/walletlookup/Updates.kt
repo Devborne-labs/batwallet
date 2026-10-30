@@ -83,7 +83,13 @@ fun isNewerVersion(a: String, b: String): Boolean {
 fun reportOnGitHub(context: Context, crash: String?) {
     val info = "Batwallet ${BatApp.appVersion(context)} · Android ${Build.VERSION.RELEASE} (API ${Build.VERSION.SDK_INT}) · " +
         "${Build.MANUFACTURER} ${Build.MODEL}"
-    val body = if (crash != null) "**What happened:**\n\n\n**Crash report:**\n```\n${crash.take(5000)}\n```\n"
+    // GitHub refuses very long links, so the link carries only the start; the whole report goes to the clipboard.
+    if (crash != null) runCatching {
+        context.getSystemService(android.content.ClipboardManager::class.java)
+            .setPrimaryClip(android.content.ClipData.newPlainText("Batwallet crash report", crash))
+        android.widget.Toast.makeText(context, tr("Full crash report copied: paste it into the issue"), android.widget.Toast.LENGTH_LONG).show()
+    }
+    val body = if (crash != null) "**What happened:**\n\n\n**Crash report** (the start; the full report is on your clipboard, paste it below):\n```\n${crash.take(1500)}\n```\n"
     else "**What went wrong:**\n\n\n**Phone:** $info\n"
     val title = if (crash != null) "Crash in Batwallet ${BatApp.appVersion(context)}" else "Problem in Batwallet ${BatApp.appVersion(context)}"
     fun enc(s: String) = URLEncoder.encode(s, "UTF-8")

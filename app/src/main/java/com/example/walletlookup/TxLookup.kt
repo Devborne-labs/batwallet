@@ -1,21 +1,21 @@
 package com.example.walletlookup
 
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.async
-import kotlinx.coroutines.awaitAll
-import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.channels.Channel
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import org.json.JSONArray
 import org.json.JSONObject
 import java.math.BigDecimal
 import java.math.BigInteger
 import java.net.URLEncoder
-import java.security.MessageDigest
 
 /** A transaction found by its ID: which network, what moved, and whether it went through. */
 data class TxInfo(val network: String, val transfer: Transfer, val status: String)
 
-private const val TRANSFER = "ddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef"
+private val TRANSFER = TRANSFER_TOPIC.removePrefix("0x")
 
 private class EvmNet(val name: String, val rpc: String, val explorer: String, val coin: String)
 private val EVM_TX = listOf(
@@ -39,22 +39,36 @@ private val EVM_STABLES = mapOf(
     "0x9702230a8ea53601f5cd2dc00fdbc13d4df4a8c7" to ("USDT" to 6), "0xb97ef9ef8734c71904d8002f8b6bc66dd9c48a6e" to ("USDC" to 6),
 )
 
+/** The lookups run here, so an answer shows as soon as one network has it while the others finish quietly. */
+private val txScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+
+/** Runs [lookups] at the same time and answers with the first that finds the transaction (null when none does). */
+private suspend fun firstFound(lookups: List<() -> TxInfo?>): TxInfo? {
+    val results = Channel<TxInfo?>(lookups.size)
+    lookups.forEach { l -> txScope.launch { results.send(runCatching { l() }.getOrNull()) } }
+    repeat(lookups.size) { results.receive()?.let { return it } }
+    return null
+}
+
 /** Finds a transaction by its ID on every network that ID format could belong to. Null when none has it. */
-suspend fun lookupTx(raw: String): TxInfo? = withContext(Dispatchers.IO) {
+suspend fun lookupTx(raw: String): TxInfo? {
     val h = raw.trim()
-    suspend fun evmAll(hash: String): TxInfo? = coroutineScope {
-        (EVM_TX.map { n -> async { runCatching { evmTx(n, hash) }.getOrNull() } } +
-            async { runCatching { aptosTx(hash) }.getOrNull() }).awaitAll().firstOrNull { it != null }
+    fun evm(hash: String): List<() -> TxInfo?> {
+        val chains: List<() -> TxInfo?> = EVM_TX.map { n -> { evmTx(n, hash) } }
+        return chains + listOf<() -> TxInfo?>({ aptosTx(hash) })
     }
-    when {
-        Regex("^0x[0-9a-fA-F]{64}$").matches(h) -> evmAll(h.lowercase())
-        Regex("^[0-9a-fA-F]{64}$").matches(h) ->
-            runCatching { tronTx(h.lowercase()) }.getOrNull()
-                ?: runCatching { esploraTx("Bitcoin", "https://mempool.space/api", "BTC", "https://mempool.space/tx/", h.lowercase()) }.getOrNull()
-                ?: runCatching { tonTx(h.lowercase()) }.getOrNull()
-                ?: runCatching { esploraTx("Litecoin", "https://litecoinspace.org/api", "LTC", "https://litecoinspace.org/tx/", h.lowercase()) }.getOrNull()
-                ?: evmAll("0x" + h.lowercase()) // some explorers show EVM hashes without the 0x
-        Regex("^[1-9A-HJ-NP-Za-km-z]{86,90}$").matches(h) -> runCatching { solanaTx(h) }.getOrNull()
+    return when {
+        HEX64_0X.matches(h) -> firstFound(evm(h.lowercase()))
+        // 64 hex characters: Tron, Bitcoin, TON, Litecoin, or an EVM hash shown without its 0x. All asked at once.
+        HEX64.matches(h) -> h.lowercase().let { l ->
+            firstFound(listOf<() -> TxInfo?>(
+                { tronTx(l) },
+                { esploraTx("Bitcoin", "https://mempool.space/api", "BTC", "https://mempool.space/tx/", l) },
+                { tonTx(l) },
+                { esploraTx("Litecoin", "https://litecoinspace.org/api", "LTC", "https://litecoinspace.org/tx/", l) },
+            ) + evm("0x$l"))
+        }
+        SOL_SIGNATURE.matches(h) -> withContext(Dispatchers.IO) { runCatching { solanaTx(h) }.getOrNull() }
         else -> null
     }
 }
@@ -90,8 +104,6 @@ private fun evmTx(n: EvmNet, h: String): TxInfo? {
         tx.optString("from"), tx.optString("to").takeIf { it.isNotBlank() && it != "null" }, n.coin), status)
 }
 
-private const val APTOS_USDT = "0x357b0b74bc833e95a115ad22604854d6b0fca151cecd94111770e5d6ffc9dc2b"
-
 private fun aptosTx(h: String): TxInfo? {
     val o = JSONObject(http("https://fullnode.mainnet.aptoslabs.com/v1/transactions/by_hash/$h"))
     val status = when {
@@ -108,7 +120,7 @@ private fun aptosTx(h: String): TxInfo? {
     val t = when {
         fn.endsWith("primary_fungible_store::transfer") -> {
             val meta = args.optJSONObject(0)?.optString("inner") ?: args.optString(0)
-            val usdt = meta.equals(APTOS_USDT, true)
+            val usdt = meta.equals(USDT_APTOS, true)
             Transfer(true, amount(BigInteger(args.optString(2, "0")), if (usdt) 6 else 8), null, time, url, h, from, args.optString(1),
                 if (usdt) "USDT" else "Token")
         }
@@ -119,22 +131,8 @@ private fun aptosTx(h: String): TxInfo? {
     return TxInfo("Aptos", t, status)
 }
 
-private const val TRON_USDT_HEX = "a614f803b6fd780986a42c78ec9c7f77e6ded13c"
-
-/** Tron hex address (41 + 20 bytes) → the usual T… address. */
-private fun tronAddress(hex41: String): String {
-    val bytes = hex41.chunked(2).map { it.toInt(16).toByte() }.toByteArray()
-    val sha = MessageDigest.getInstance("SHA-256")
-    val check = sha.digest(sha.digest(bytes)).take(4).toByteArray()
-    val full = bytes + check
-    val alphabet = "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz"
-    var n = BigInteger(1, full)
-    val sb = StringBuilder()
-    val b58 = BigInteger.valueOf(58)
-    while (n.signum() > 0) { val (q, r) = n.divideAndRemainder(b58); sb.append(alphabet[r.toInt()]); n = q }
-    full.takeWhile { it.toInt() == 0 }.forEach { _ -> sb.append('1') }
-    return sb.reverse().toString()
-}
+/** The USDT contract as Tron's event logs name it: 20 bytes of hex, no 41 prefix. */
+private val TRON_USDT_HEX = tronHex(USDT_TRC20)
 
 private fun tronTx(h: String): TxInfo? {
     val body = JSONObject().put("value", h).toString()
@@ -155,14 +153,14 @@ private fun tronTx(h: String): TxInfo? {
         val topics = l.optJSONArray("topics") ?: continue
         if (topics.length() != 3 || topics.getString(0) != TRANSFER) continue
         val usdt = l.optString("address").lowercase() == TRON_USDT_HEX
-        val from = tronAddress("41" + topics.getString(1).takeLast(40))
-        val to = tronAddress("41" + topics.getString(2).takeLast(40))
+        val from = tronBase58("41" + topics.getString(1).takeLast(40))
+        val to = tronBase58("41" + topics.getString(2).takeLast(40))
         return TxInfo("Tron", Transfer(true, amount(hexNum(l.optString("data")), 6), null, time, url, h, from, to,
             if (usdt) "USDT" else "Token"), status)
     }
     val v = tx.optJSONObject("raw_data")?.optJSONArray("contract")?.optJSONObject(0)?.optJSONObject("parameter")?.optJSONObject("value")
-    val from = v?.optString("owner_address")?.takeIf { it.isNotBlank() }?.let(::tronAddress)
-    val to = v?.optString("to_address")?.takeIf { it.isNotBlank() }?.let(::tronAddress)
+    val from = v?.optString("owner_address")?.takeIf { it.isNotBlank() }?.let(::tronBase58)
+    val to = v?.optString("to_address")?.takeIf { it.isNotBlank() }?.let(::tronBase58)
     return TxInfo("Tron", Transfer(true, amount(BigInteger.valueOf(v?.optLong("amount") ?: 0L), 6), null, time, url, h, from, to, "TRX"), status)
 }
 
@@ -206,11 +204,6 @@ private fun tonTx(h: String): TxInfo? {
     return TxInfo("TON", Transfer(true, BigDecimal.ZERO, null, time, url, h, null, null, "TON"), status)
 }
 
-private val SOL_MINTS = mapOf(
-    "Es9vMFrzaCERmJfrF4H2FYD4KCoNkY11McCe8BenwNYB" to "USDT",
-    "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v" to "USDC",
-)
-
 private fun solanaTx(sig: String): TxInfo? {
     val r = solanaCall("getTransaction", JSONArray().put(sig)
         .put(JSONObject().put("encoding", "jsonParsed").put("maxSupportedTransactionVersion", 0))).optJSONObject("result") ?: return null
@@ -238,7 +231,7 @@ private fun solanaTx(sig: String): TxInfo? {
             "transferChecked", "transfer" -> if (ins.getJSONObject(i).optString("program") == "spl-token") {
                 val amt = info.optJSONObject("tokenAmount")?.optString("uiAmountString")?.let(::BigDecimal)
                     ?: BigDecimal(info.optString("amount", "0")).movePointLeft(6)
-                val sym = SOL_MINTS[info.optString("mint")] ?: "Token"
+                val sym = SOL_STABLES[info.optString("mint")] ?: "Token"
                 val from = info.optString("authority").ifBlank { owners[info.optString("source")] ?: info.optString("source") }
                 val to = owners[info.optString("destination")] ?: info.optString("destination")
                 return TxInfo("Solana", Transfer(true, amt, null, time, url, sig, from, to, sym), status)

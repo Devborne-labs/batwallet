@@ -8,7 +8,6 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.unit.sp
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
@@ -149,12 +148,14 @@ fun SafetyCard(
                         verticalArrangement = Arrangement.spacedBy(6.dp),
                     ) {
                         s.checks.forEach { c ->
+                            // Each flag in its level's colour: green clean, amber caution, red danger, grey information.
+                            val tone = levelColor(c.level)
                             Text(
                                 "${icon(c.level)}  ${tr(c.title)}",
-                                style = MaterialTheme.typography.labelSmall,
-                                color = if (c.level == Level.BAD) red else MaterialTheme.colorScheme.onSurface,
+                                style = MaterialTheme.typography.labelSmall, fontWeight = FontWeight.SemiBold,
+                                color = tone,
                                 modifier = Modifier.clip(RoundedCornerShape(50))
-                                    .background(MaterialTheme.colorScheme.surface.copy(alpha = 0.7f))
+                                    .background(tone.copy(alpha = 0.16f))
                                     .padding(horizontal = 10.dp, vertical = 5.dp),
                             )
                         }
@@ -163,7 +164,7 @@ fun SafetyCard(
                     s.checks.forEach { c ->
                         Column(Modifier.padding(top = 10.dp)) {
                             Text("${icon(c.level)}  ${tr(c.title)}", style = MaterialTheme.typography.labelLarge,
-                                color = if (c.level == Level.BAD) red else MaterialTheme.colorScheme.onSurface)
+                                fontWeight = FontWeight.SemiBold, color = levelColor(c.level))
                             Text(c.detail, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                         }
                     }
@@ -181,6 +182,15 @@ private fun icon(level: Level) = when (level) {
     Level.INFO -> "i"
     Level.WARN -> "!"
     Level.BAD -> "✕"
+}
+
+/** One colour per check level: green clean, amber caution, red danger, grey for plain information. */
+@Composable
+private fun levelColor(level: Level): Color = when (level) {
+    Level.GOOD -> InGreen
+    Level.WARN -> Color(0xFFE0A100)
+    Level.BAD -> MaterialTheme.colorScheme.error
+    Level.INFO -> MaterialTheme.colorScheme.onSurfaceVariant
 }
 
 // ===================== History =====================

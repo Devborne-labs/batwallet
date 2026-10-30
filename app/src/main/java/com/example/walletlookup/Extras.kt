@@ -3,7 +3,6 @@ package com.example.walletlookup
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
-import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.withContext
 import org.json.JSONArray
 import org.json.JSONObject
@@ -202,8 +201,8 @@ private fun tezosHistory(a: String): History {
     return History("Tezos", items)
 }
 
-/** Solana: SOL balance change of this address in each of its latest transactions. */
-private val SOL_STABLES = mapOf(
+/** Solana's USDT and USDC mints (history, balances and transaction lookup all use this one list). */
+internal val SOL_STABLES = mapOf(
     "Es9vMFrzaCERmJfrF4H2FYD4KCoNkY11McCe8BenwNYB" to "USDT",
     "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v" to "USDC",
 )
