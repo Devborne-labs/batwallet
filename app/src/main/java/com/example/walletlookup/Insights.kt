@@ -802,11 +802,33 @@ internal fun tonFriendly(raw: String?): String? {
 
 enum class Level { GOOD, INFO, WARN, BAD }
 
-data class Check(val level: Level, val title: String, val detail: String)
+/** One check's result. [failed]: the check couldn't run (its service didn't answer); [detail] then says why. */
+data class Check(val level: Level, val title: String, val detail: String, val failed: Boolean = false)
 
 data class Safety(val checks: List<Check>) {
     val level: Level get() = checks.maxOfOrNull { it.level } ?: Level.INFO
+    /** Checks that couldn't run this time; worth a retry. */
+    val failed: List<Check> get() = checks.filter { it.failed }
 }
+
+/** Why a request failed, in plain words for the person reading it (no raw server text). */
+fun failureReason(e: Exception): String {
+    val m = e.message.orEmpty()
+    val code = HTTP_CODE.find(m)?.groupValues?.get(1)?.toIntOrNull()
+    return when {
+        e is java.net.UnknownHostException || e is java.net.ConnectException || e is java.net.NoRouteToHostException ->
+            "No internet connection."
+        e is java.net.SocketTimeoutException -> "The service took too long to answer."
+        e is javax.net.ssl.SSLException -> "Couldn't make a secure connection."
+        m.contains("Rate limited") || code == 429 -> "Too many requests. Wait a minute, then retry."
+        code != null && code >= 500 -> "The service is down right now."
+        code != null -> "The service refused the request."
+        e is org.json.JSONException -> "The service sent an answer the app couldn't read."
+        else -> "Couldn't reach the service."
+    }
+}
+
+private val HTTP_CODE = Regex("""HTTP (\d{3})""")
 
 private val GOPLUS_FLAGS = mapOf(
     "cybercrime" to "cybercrime",
@@ -868,7 +890,7 @@ private fun scamDatabase(a: String, type: AddrType): Check? = try {
             "Free scam lists don't cover ${type.label} yet. Rely on the other checks and only send to people you trust.")
     }
 } catch (e: Exception) {
-    Check(Level.INFO, "Scam database unavailable", "Couldn't reach the scam database right now (${e.message}).")
+    Check(Level.INFO, "Scam list check failed", failureReason(e), failed = true)
 }
 
 private fun tetherFreeze(a: String, type: AddrType): Check? = try {
@@ -903,7 +925,7 @@ private fun tetherFreeze(a: String, type: AddrType): Check? = try {
         false -> Check(Level.GOOD, "Not frozen by Tether", "Tether hasn't blacklisted this address.")
     }
 } catch (e: Exception) {
-    null
+    Check(Level.INFO, "Tether freeze check failed", failureReason(e), failed = true)
 }
 
 private fun contractCheck(a: String): Check? = try {
@@ -914,15 +936,19 @@ private fun contractCheck(a: String): Check? = try {
         Check(Level.WARN, "This is a smart contract", "Not a personal wallet. Only send to it if you know exactly what this contract does.")
     } else null
 } catch (e: Exception) {
-    null
+    Check(Level.INFO, "Contract check failed", failureReason(e), failed = true)
 }
 
-private fun activityCheck(hist: List<History>): Check? {
+internal fun activityCheck(hist: List<History>): Check? {
     val supported = hist.filter { it.supported }
     if (supported.isEmpty()) return null // no history source for this network; balances above show activity
     val loaded = supported.filter { it.error == null }
     val all = loaded.flatMap { it.items }
-    if (loaded.isEmpty()) return Check(Level.INFO, "Activity unknown", "Couldn't load the transaction history.")
+    if (loaded.isEmpty()) {
+        // The history's own error, minus its "pull down" hint (the safety card has a Retry button).
+        val why = supported.firstNotNullOfOrNull { it.error }?.removeSuffix(" Pull down to retry.") ?: "Couldn't load right now."
+        return Check(Level.INFO, "Activity check failed", why, failed = true)
+    }
     if (all.isEmpty()) {
         return Check(Level.WARN, "No stablecoin transfers found",
             "This looks like a new or unused wallet. Double-check every character of the address before sending.")

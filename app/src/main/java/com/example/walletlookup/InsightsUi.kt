@@ -30,6 +30,10 @@ import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.TextButton
+import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.Icon
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material3.pulltorefresh.PullToRefreshBox
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -70,11 +74,20 @@ fun SafetyCard(
     platform: Platform?,
     /** Every network answered and the address has no balance and no activity anywhere: not activated yet. */
     unused: Boolean = false,
-    /** Some network didn't answer: a clean result would only be partial. */
-    incomplete: Boolean = false,
+    /** Networks that didn't answer: a clean result would only be partial. */
+    unanswered: List<String> = emptyList(),
+    /** Why the whole check couldn't run this time (the balances didn't load, no internet…). */
+    error: String? = null,
+    /** The check, or the balances it needs, is running again: Retry shows "Checking again…". */
+    retrying: Boolean = false,
+    onRetry: (() -> Unit)? = null,
 ) {
     var open by remember { mutableStateOf(false) }
-    val badCheck = safety?.checks?.firstOrNull { it.level == Level.BAD }
+    val incomplete = unanswered.isNotEmpty()
+    // Checks that couldn't run are listed with their reason under the verdict, not as ticks.
+    val failures = safety?.failed.orEmpty()
+    val shown = safety?.checks.orEmpty().filter { !it.failed }
+    val badCheck = shown.firstOrNull { it.level == Level.BAD }
     val danger = twin != null || badCheck != null
     val verdict = when {
         twin != null -> "Lookalike of your saved \"${twin.name}\""
@@ -84,12 +97,15 @@ fun SafetyCard(
         savedWallet != null && savedWallet.onExchange -> tr("In your wallets") + " · ${savedWallet.name}"
         savedWallet != null -> "Your own wallet"
         safety == null && loading -> "Checking…"
+        safety == null && error != null -> "Couldn't run the safety check"
         safety == null -> "Couldn't check right now"
         safety.level == Level.WARN -> "New or unused address"
+        failures.isNotEmpty() -> "Some checks didn't run"
         else -> "No red flags found"
     }
     val red = MaterialTheme.colorScheme.error
     val amber = Color(0xFFE0A100)
+    val grey = MaterialTheme.colorScheme.onSurfaceVariant
     // One colour and symbol per state: red = don't send, amber = never used, green = clean, grey = yours / checking.
     val notActivated = !danger && savedWallet == null && unused
     val partial = !danger && savedWallet == null && !notActivated && incomplete
@@ -98,19 +114,27 @@ fun SafetyCard(
         notActivated -> Triple(amber, "!", tr("Not activated yet"))
         // Your own wallet or contact: green once the checks found nothing wrong (grey while checking).
         savedWallet != null -> if (safety != null && safety.level != Level.BAD) Triple(InGreen, "✓", verdict)
-            else Triple(MaterialTheme.colorScheme.onSurfaceVariant, "✓", verdict)
+            else Triple(grey, "✓", verdict)
         // Grey, not green: a network didn't answer, so the all-clear would only cover part of the address.
-        partial -> Triple(MaterialTheme.colorScheme.onSurfaceVariant, "?", tr("Couldn't fully check"))
-        safety == null -> Triple(MaterialTheme.colorScheme.onSurfaceVariant, "…", verdict)
+        partial -> Triple(grey, "?", tr("Couldn't fully check"))
+        safety == null && error != null -> Triple(grey, "?", verdict)
+        safety == null -> Triple(grey, "…", verdict)
         safety.level == Level.WARN -> Triple(amber, "!", verdict)
+        // Grey too when part of the check couldn't run: "no red flags" would only cover what did.
+        failures.isNotEmpty() -> Triple(grey, "?", verdict)
         else -> Triple(InGreen, "✓", verdict)
     }
     val subtitle = when {
         twin != null -> "Different address made to look like yours. Don't send money to it."
         danger -> "Reported as a scam or compromised. Don't send money to this address."
         notActivated -> "This address has never received or sent anything. Double-check it before sending money."
-        partial -> "A network didn't answer. Try again in a moment."
         else -> platform?.let { tr("Platform:") + " " + it.how }
+    }
+    // What couldn't be checked and why, each as (what, reason).
+    val problems = buildList {
+        if (error != null) add("Safety check didn't run" to error)
+        if (incomplete) add("Some networks didn't answer" to unanswered.joinToString(", "))
+        failures.forEach { add(it.title to it.detail) }
     }
     Card(
         Modifier.fillMaxWidth().clip(RoundedCornerShape(16.dp)).clickable(enabled = safety != null) { open = !open },
@@ -130,15 +154,15 @@ fun SafetyCard(
                         color = if (danger) red else MaterialTheme.colorScheme.onSurface)
                     subtitle?.let {
                         Text(it, style = MaterialTheme.typography.bodySmall,
-                            color = if (danger) red else MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(top = 2.dp))
+                            color = if (danger) red else grey, modifier = Modifier.padding(top = 2.dp))
                     }
                 }
-                if (safety != null) {
+                if (safety != null && shown.isNotEmpty()) {
                     Text(if (open) "Less" else "Details", style = MaterialTheme.typography.labelMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(start = 8.dp))
+                        color = grey, modifier = Modifier.padding(start = 8.dp))
                 }
             }
-            safety?.let { s ->
+            if (shown.isNotEmpty()) {
                 if (!open) {
                     // The individual checks as small pills.
                     @OptIn(androidx.compose.foundation.layout.ExperimentalLayoutApi::class)
@@ -147,7 +171,7 @@ fun SafetyCard(
                         horizontalArrangement = Arrangement.spacedBy(6.dp),
                         verticalArrangement = Arrangement.spacedBy(6.dp),
                     ) {
-                        s.checks.forEach { c ->
+                        shown.forEach { c ->
                             // Each flag in its level's colour: green clean, amber caution, red danger, grey information.
                             val tone = levelColor(c.level)
                             Text(
@@ -161,16 +185,51 @@ fun SafetyCard(
                         }
                     }
                 } else {
-                    s.checks.forEach { c ->
+                    shown.forEach { c ->
                         Column(Modifier.padding(top = 10.dp)) {
                             Text("${icon(c.level)}  ${tr(c.title)}", style = MaterialTheme.typography.labelLarge,
                                 fontWeight = FontWeight.SemiBold, color = levelColor(c.level))
-                            Text(c.detail, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                            Text(c.detail, style = MaterialTheme.typography.labelSmall, color = grey)
                         }
                     }
                     Text("A clean result isn't a guarantee. Only send to people you trust.",
-                        style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        style = MaterialTheme.typography.labelSmall, color = grey,
                         modifier = Modifier.padding(top = 10.dp))
+                }
+            }
+            if (problems.isNotEmpty()) SafetyProblems(problems, retrying, onRetry)
+        }
+    }
+}
+
+/** What the safety check couldn't do and why, with a Retry button (or "Checking again…" while it runs). */
+@Composable
+private fun SafetyProblems(problems: List<Pair<String, String>>, retrying: Boolean, onRetry: (() -> Unit)?) {
+    Column(
+        Modifier.padding(top = 12.dp).fillMaxWidth().clip(RoundedCornerShape(12.dp))
+            .background(MaterialTheme.colorScheme.surface.copy(alpha = 0.55f))
+            .padding(horizontal = 12.dp, vertical = 10.dp),
+        verticalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        problems.forEach { (what, why) ->
+            Column {
+                Text("✕  " + tr(what), style = MaterialTheme.typography.labelLarge, fontWeight = FontWeight.SemiBold)
+                Text(tr(why), style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(start = 20.dp))
+            }
+        }
+        if (onRetry != null) {
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End, verticalAlignment = Alignment.CenterVertically) {
+                if (retrying) {
+                    CircularProgressIndicator(Modifier.size(16.dp), strokeWidth = 2.dp)
+                    Spacer(Modifier.width(8.dp))
+                    Text("Checking again…", style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                } else {
+                    OutlinedButton(onClick = onRetry, contentPadding = PaddingValues(horizontal = 14.dp, vertical = 6.dp)) {
+                        Icon(Icons.Filled.Refresh, contentDescription = null, modifier = Modifier.size(16.dp))
+                        Spacer(Modifier.width(6.dp))
+                        Text("Retry")
+                    }
                 }
             }
         }

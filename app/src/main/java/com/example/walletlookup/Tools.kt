@@ -137,9 +137,12 @@ fun SendCheckDialog(onOpen: (String) -> Unit, onDismiss: () -> Unit) {
     var input by remember { mutableStateOf(clipboard.getText()?.text?.trim().orEmpty()) }
     var busy by remember { mutableStateOf(false) }
     var lines by remember { mutableStateOf<List<Pair<Level, String>>?>(null) }
+    // Part of the check couldn't run (each such line says why): offer Retry.
+    var incomplete by remember { mutableStateOf(false) }
     fun check() {
         val a = cleanAddress(input)
         val type = detect(a)
+        incomplete = false
         if (type == null) { lines = listOf(Level.BAD to tr("Not a supported address")); return }
         busy = true
         lines = null
@@ -153,17 +156,42 @@ fun SendCheckDialog(onOpen: (String) -> Unit, onDismiss: () -> Unit) {
                 out += Level.BAD to (tr("Lookalike of") + " " + walletLabel(twin) + " · " + tr("don't send"))
             }
             knownPlatform(a)?.let { out += Level.INFO to (tr("Exchange wallet") + ": " + it) }
-            val results = runCatching { lookup(a, type, withPrices = false) }.getOrDefault(emptyList())
+            var lookupError: String? = null
+            val results = try {
+                lookup(a, type, withPrices = false)
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                lookupError = failureReason(e)
+                emptyList()
+            }
             val ok = results.filter { it.error == null }
+            val unanswered = results.filter { it.error != null }.map { it.network }
             when {
-                results.isEmpty() || ok.isEmpty() -> out += Level.INFO to tr("Couldn't fully check")
+                results.isEmpty() || ok.isEmpty() -> {
+                    out += Level.INFO to (tr("Couldn't fully check") + " · " + tr(lookupError ?: "No network answered."))
+                    incomplete = true
+                }
                 ok.none { it.active } -> out += Level.WARN to tr("Not activated yet") + " · " + tr("never received or sent anything")
                 else -> out += Level.GOOD to tr("Used on") + " " + ok.filter { it.active }.joinToString(", ") { it.network }
             }
-            runCatching {
+            if (ok.isNotEmpty() && unanswered.isNotEmpty()) {
+                out += Level.INFO to (tr("Some networks didn't answer") + ": " + unanswered.joinToString(", "))
+                incomplete = true
+            }
+            try {
                 val used = ok.filter { it.active }.map { it.network }.toSet().ifEmpty { null }
-                safety(a, history(a, used, limit = 10)).checks
-            }.getOrDefault(emptyList()).forEach { c -> out += c.level to tr(c.title) }
+                safety(a, history(a, used, limit = 10)).checks.forEach { c ->
+                    // A check that couldn't run says why.
+                    out += c.level to (tr(c.title) + if (c.failed) " · " + tr(c.detail) else "")
+                    if (c.failed) incomplete = true
+                }
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                out += Level.INFO to (tr("Safety check didn't run") + " · " + tr(failureReason(e)))
+                incomplete = true
+            }
             lines = out.distinctBy { it.second }
             busy = false
         }
@@ -204,7 +232,10 @@ fun SendCheckDialog(onOpen: (String) -> Unit, onDismiss: () -> Unit) {
             }
         },
         confirmButton = {
-            if (lines != null && detect(cleanAddress(input)) != null) TextButton(onClick = { onOpen(cleanAddress(input)) }) { Text("Open") }
+            if (lines != null && detect(cleanAddress(input)) != null) Row {
+                if (incomplete) TextButton(onClick = { check() }, enabled = !busy) { Text("Retry") }
+                TextButton(onClick = { onOpen(cleanAddress(input)) }) { Text("Open") }
+            }
             else TextButton(onClick = { check() }, enabled = !busy && input.isNotBlank()) { Text("Check") }
         },
         dismissButton = { TextButton(onClick = onDismiss) { Text("Close") } },
