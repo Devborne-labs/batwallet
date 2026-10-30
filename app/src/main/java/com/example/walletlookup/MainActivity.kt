@@ -225,6 +225,18 @@ private val LightBat: ColorScheme = lightColorScheme(
     error = ComposeColor(0xFFB3483D),
 )
 
+/**
+ * The lock as the last screen in this app process left it. Android can rebuild the screen while the app is in the
+ * background (dark mode, font size or language changed meanwhile); the rebuilt one carries on from here and the
+ * auto-lock time decides as usual. Once the process is closed this is gone, so a fresh start always locks.
+ */
+private object LockMemory {
+    @Volatile var known = false
+    @Volatile var locked = true
+    @Volatile var backgroundAt = 0L
+    @Volatile var screenWentOff = false
+}
+
 class MainActivity : FragmentActivity() {
     private lateinit var store: Store
     private var locked by mutableStateOf(false)
@@ -242,7 +254,10 @@ class MainActivity : FragmentActivity() {
     private var receiverRegistered = false
     private val screenOffReceiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context, intent: Intent) {
-            if (lockEnabled && store.lockOnScreenOff) screenWentOff = true
+            if (lockEnabled && store.lockOnScreenOff) {
+                screenWentOff = true
+                LockMemory.screenWentOff = true
+            }
         }
     }
 
@@ -251,7 +266,10 @@ class MainActivity : FragmentActivity() {
         store = Store(this)
         // Recreated after a rotation (or other change): the shared text was already read from the intent and must not
         // be handled twice; one still waiting (e.g. behind the lock screen) comes back from the saved state.
-        shared = if (savedInstanceState == null) sharedText(intent) else savedInstanceState.getString(STATE_SHARED)
+        // Reopened from Recents after Back closed it: Android hands back the original share, already handled then.
+        val fromRecents = (intent.flags and Intent.FLAG_ACTIVITY_LAUNCHED_FROM_HISTORY) != 0
+        shared = if (savedInstanceState == null) sharedText(intent).takeUnless { fromRecents }
+            else savedInstanceState.getString(STATE_SHARED)
         I18n.load(this)
         historyPrefs = getSharedPreferences("history", MODE_PRIVATE)
         I18n.lang = store.language
@@ -263,10 +281,17 @@ class MainActivity : FragmentActivity() {
         // The lock always covers the whole app (locking only Wallets left the total visible on Home).
         // A rotation keeps the lock as it was; any other new start (first launch, or the system had closed the app)
         // locks, so nothing saved from an unlocked session can open it.
-        locked = if (savedInstanceState != null && savedInstanceState.getBoolean(STATE_CONFIG_CHANGE)) {
-            savedInstanceState.getBoolean(STATE_LOCKED)
-        } else {
-            lockEnabled && canAuthenticate()
+        locked = when {
+            savedInstanceState != null && savedInstanceState.getBoolean(STATE_CONFIG_CHANGE) ->
+                savedInstanceState.getBoolean(STATE_LOCKED)
+            // Rebuilt in this same process while in the background: carry on as it was left; onStart then locks if
+            // the auto-lock time has passed or the screen went off.
+            savedInstanceState != null && LockMemory.known -> {
+                backgroundAt = LockMemory.backgroundAt
+                screenWentOff = LockMemory.screenWentOff
+                LockMemory.locked
+            }
+            else -> lockEnabled && canAuthenticate()
         }
         lifecycleScope.launch { runCatching { weeklyUpdateCheck(applicationContext) } }
         SelfUpdate.cleanUp(this)
@@ -356,6 +381,7 @@ class MainActivity : FragmentActivity() {
         val relock = (screenWentOff && canAuthenticate()) || (timedOut && !ownPrompt)
         relockIfCancelled = timedOut && ownPrompt && away >= AUTH_GRACE_MS
         screenWentOff = false
+        LockMemory.screenWentOff = false
         stoppedInAuth = false
         if (relock) locked = true
         backgroundAt = 0
@@ -374,6 +400,10 @@ class MainActivity : FragmentActivity() {
             backgroundAt = SystemClock.elapsedRealtime()
             stoppedInAuth = authInProgress
             relockIfCancelled = false
+            // For a screen Android rebuilds while the app is in the background (see LockMemory).
+            LockMemory.known = true
+            LockMemory.locked = locked
+            LockMemory.backgroundAt = backgroundAt
         }
     }
 
@@ -550,6 +580,9 @@ private fun App(
     var lookedUp by remember { mutableStateOf<Pair<String, Int>?>(null) }
     // Counts lookups, so a cancelled one that ends late can't switch off the newer one's loading state.
     val lookupRuns = remember { java.util.concurrent.atomic.AtomicInteger() }
+    // The same for the safety check: a cancelled earlier run (its blocking requests still finishing) mustn't switch off
+    // the spinner of the run that replaced it.
+    val safetyRuns = remember { java.util.concurrent.atomic.AtomicInteger() }
     var message by remember { mutableStateOf<String?>(null) }
     var saved by remember {
         // One address saved twice (an older version could do it) crashes the Wallets list: keep the first, and save
@@ -927,6 +960,9 @@ private fun App(
         val t = detect(a) ?: run {
             results = emptyList()
             resultsFor = a
+            // No lookup for this one: the previous address's (cancelled, still finishing) is no longer the latest.
+            lookupRuns.incrementAndGet()
+            loading = false
             if (a.isNotBlank()) message = "Not a supported address. Check that it was copied completely."
             return@LaunchedEffect
         }
@@ -988,6 +1024,7 @@ private fun App(
         // Retry asked for it: run the checks again even when the saved ones are recent.
         val force = safetyForce
         safetyForce = false
+        val thisSafety = safetyRuns.incrementAndGet()
         if (detect(a) == null) {
             safetyResult = null
             homeHistory = null
@@ -1029,7 +1066,7 @@ private fun App(
         } catch (e: Exception) {
             if (!fresh) safetyError = failureReason(e)
         } finally {
-            safetyLoading = false
+            if (safetyRuns.get() == thisSafety) safetyLoading = false
         }
     }
 
@@ -1359,7 +1396,12 @@ private fun App(
         if (justUpdated(context, saved.isNotEmpty())) whatsNew = releaseNotes(BatApp.appVersion(context))
     }
     if (!locked) whatsNew?.let { WhatsNewDialog(BatApp.appVersion(context), it) { whatsNew = null } }
-    if (!locked) txCheckFor?.let { initial ->
+    // Open before the app locked: it stays (under the lock screen, which is a window above it), so its ID and search
+    // survive locking. One asked for while locked (e.g. after picking a photo) waits for unlock instead of opening
+    // above the lock screen.
+    var txOpenBeforeLock by remember { mutableStateOf<String?>(null) }
+    LaunchedEffect(locked, txCheckFor) { if (!locked) txOpenBeforeLock = txCheckFor }
+    if (!locked || txCheckFor == txOpenBeforeLock) txCheckFor?.let { initial ->
         // A new ID (e.g. shared while the dialog is open) starts the dialog afresh, with that ID and its search.
         key(initial) {
             TxCheckDialog(initial, onFound = { txCheckFor = null; txInfo = it }, onDismiss = { txCheckFor = null })
@@ -2552,16 +2594,18 @@ private fun SettingsTab(
     var savedKey by remember { mutableStateOf(store.etherscanKey) }
     val scope = rememberCoroutineScope()
     // Switching currency: its exchange rate loads first; the old currency stays until it has.
-    var currencyLoading by remember { mutableStateOf(false) }
+    // The currency whose rate is loading (shown on its row).
+    var pendingCurrency by remember { mutableStateOf<Fiat?>(null) }
     fun pickCurrency(f: Fiat) {
-        if (f == fiat || currencyLoading) return
+        if (f == fiat || pendingCurrency != null) return
         // USD and USDT need no rate.
         if (f == Fiat.USD || f == Fiat.USDT) {
             fiat = f; fiatRate = 1.0; store.currency = f; store.currencyRate = 1.0
             return
         }
-        currencyLoading = true
-        scope.launch {
+        pendingCurrency = f
+        // In the screen's scope, not this page's: leaving Settings mustn't cancel the switch halfway.
+        ((context as? androidx.lifecycle.LifecycleOwner)?.lifecycleScope ?: scope).launch {
             try {
                 val rate = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) { fetchFiatRate(f.code) }
                 if (rate != null) {
@@ -2572,7 +2616,7 @@ private fun SettingsTab(
                         android.widget.Toast.LENGTH_SHORT).show()
                 }
             } finally {
-                currencyLoading = false
+                pendingCurrency = null
             }
         }
     }
@@ -2675,7 +2719,9 @@ private fun SettingsTab(
             // USDT first; the usual currencies below it.
             RadioRow(fiat == Fiat.USDT, Fiat.USDT.label) { pickCurrency(Fiat.USDT) }
             Label("Other currencies")
-            Fiat.entries.filter { it != Fiat.USDT }.forEach { f -> RadioRow(f == fiat, f.label) { pickCurrency(f) } }
+            Fiat.entries.filter { it != Fiat.USDT }.forEach { f ->
+                RadioRow(f == fiat, f.label + if (pendingCurrency == f) " · " + tr("Loading…") else "") { pickCurrency(f) }
+            }
         }
         }
         SettingsSection("Alerts & security") {
