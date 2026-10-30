@@ -197,10 +197,16 @@ fun RecentTxSection(
                                     maxLines = 1,
                                     overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis, fontWeight = FontWeight.Medium)
                             }
-                            // Which of your wallets it was, then when.
-                            Text((walletName(w) ?: net) + " · " + (if (t.time > 0) shortDate(t.time / 1000) else tr("Pending")),
-                                style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1,
-                                overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis)
+                            // Which of your wallets it was, then when. The time is never cut off: a long wallet name
+                            // gives way first ("Broke sato… · Yesterday 21:09").
+                            Row {
+                                Text(walletName(w) ?: net,
+                                    style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1,
+                                    overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis, modifier = Modifier.weight(1f, fill = false))
+                                Text(" · " + (if (t.time > 0) shortDate(t.time / 1000) else tr("Pending")),
+                                    style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1,
+                                    softWrap = false)
+                            }
                         }
                         // In your chosen currency; the coin amount is on the transaction's page.
                         Text((if (t.incoming) "+" else "−") + hideable(transferValue(t.amount, t.symbol)),

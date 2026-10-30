@@ -182,7 +182,7 @@ private val Inter = FontFamily(
     Font(R.font.inter_700, FontWeight.Bold),
 )
 
-private val BatType = Typography().run {
+internal val BatType = Typography().run {
     fun TextStyle.inter() = copy(fontFamily = Inter)
     copy(
         displayLarge = displayLarge.inter(), displayMedium = displayMedium.inter(), displaySmall = displaySmall.inter(),
@@ -193,7 +193,7 @@ private val BatType = Typography().run {
     )
 }
 
-private val DarkBat: ColorScheme = darkColorScheme(
+internal val DarkBat: ColorScheme = darkColorScheme(
     primary = BatGold, onPrimary = BatGoldInk,
     primaryContainer = ComposeColor(0xFF2E2819), onPrimaryContainer = ComposeColor(0xFFEBD6A8),
     secondary = ComposeColor(0xFFF2F2F2), onSecondary = BatBlack,
@@ -1697,7 +1697,7 @@ private fun HomeTab(
 
 /** Total of all saved wallets. Tap it to hide or show amounts. */
 @Composable
-private fun TotalHeader(
+internal fun TotalHeader(
     saved: List<SavedAddress>,
     cache: Map<String, Cached>,
     syncing: Set<String>,
@@ -2002,7 +2002,12 @@ private fun WalletsTab(
                 UnderlineTab("Wallets", subPage == 0, Modifier.weight(1f)) { onSubPage(0) }
                 UnderlineTab("Contacts", subPage == 1, Modifier.weight(1f)) { onSubPage(1) }
             }
-            HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f))
+            // While wallets update, the same gold light as Home's total card sweeps along the line under the tabs.
+            val sweepAlpha by animateFloatAsState(if (syncing.isNotEmpty()) 1f else 0f, tween(400), label = "sweep")
+            Box(Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
+                HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f))
+                if (sweepAlpha > 0f) BatSweep(Modifier.fillMaxWidth().height(2.dp).alpha(sweepAlpha), color = BatGold)
+            }
             if (current.searchable && !selecting) {
                 OutlinedTextField(
                     value = query, onValueChange = { query = it }, singleLine = true,
@@ -2014,7 +2019,8 @@ private fun WalletsTab(
             }
         }
 
-        BatPullToRefresh(isRefreshing = syncing.isNotEmpty(), onRefresh = onRefreshAll, modifier = Modifier.fillMaxSize()) {
+        // The light under the tabs is the updating sign, so the pull's dots only fill while pulling.
+        BatPullToRefresh(isRefreshing = syncing.isNotEmpty(), onRefresh = onRefreshAll, modifier = Modifier.fillMaxSize(), ownStatus = true) {
             run {
                 val p = subPage
                 val pg = pages[p]
