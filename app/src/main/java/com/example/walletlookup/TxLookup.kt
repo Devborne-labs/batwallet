@@ -6,6 +6,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
 import org.json.JSONArray
 import org.json.JSONObject
@@ -104,7 +105,25 @@ suspend fun lookupTx(raw: String): TxSearch {
         SOL_SIGNATURE.matches(h) -> listOf(TxCheck("Solana") { solanaTx(h) })
         else -> return TxSearch(null, emptyList(), null)
     }
-    return searchTx(checks)
+    val r = searchTx(checks)
+    // Ethereum and Ethereum Classic share everything from before their 2016 split (same IDs): whichever answered
+    // first won. Such a transaction is Ethereum's, so ask Ethereum before settling on Ethereum Classic.
+    val found = r.found
+    if (found?.network == "Ethereum Classic") {
+        val eth = EVM_CHAINS.firstOrNull { it.name == "Ethereum" } ?: return r
+        val hash = if (h.startsWith("0x")) h.lowercase() else "0x" + h.lowercase()
+        val onEthereum = withContext(Dispatchers.IO) {
+            try {
+                evmTx(eth, hash)
+            } catch (e: CancellationException) {
+                throw e
+            } catch (_: Exception) {
+                null
+            }
+        }
+        if (onEthereum != null) return TxSearch(onEthereum, emptyList(), null)
+    }
+    return r
 }
 
 private fun hexNum(s: String?): BigInteger = s?.removePrefix("0x")?.ifEmpty { "0" }?.let { BigInteger(it, 16) } ?: BigInteger.ZERO
@@ -260,11 +279,12 @@ private fun tronTx(h: String): TxInfo? {
 
 /**
  * The payment among a transaction's outputs (address, amount in satoshis): one going to a saved wallet or contact
- * if there is one, else the biggest that doesn't go back to the sender. On wallets that send change to a fresh
- * address the biggest output can be the change, so a known address is the better sign of the payment.
+ * if there is one, else the biggest that doesn't go back to a sender. On wallets that send change to a fresh
+ * address the biggest output can be the change, so a known address is the better sign of the payment. [inputs] are
+ * all the addresses the transaction spends from: change to any of them (even a saved one) is never the payment.
  */
-internal fun paymentOutput(outputs: List<Pair<String?, Long>>, from: String?, saved: List<String>): Pair<String?, Long>? {
-    val candidates = outputs.filter { it.first != from }
+internal fun paymentOutput(outputs: List<Pair<String?, Long>>, inputs: Set<String>, saved: List<String>): Pair<String?, Long>? {
+    val candidates = outputs.filter { it.first == null || it.first !in inputs }
     val toSaved = candidates.filter { (address, _) -> address != null && saved.any { it.equals(address, ignoreCase = true) } }
     return toSaved.ifEmpty { candidates }.maxByOrNull { it.second }
 }
@@ -274,12 +294,16 @@ private fun esploraTx(name: String, base: String, sym: String, explorer: String,
     val st = o.optJSONObject("status")
     val confirmed = st?.optBoolean("confirmed") == true
     val time = st?.optLong("block_time")?.takeIf { it > 0 }?.times(1000) ?: 0L
-    val from = o.optJSONArray("vin")?.optJSONObject(0)?.optJSONObject("prevout")?.optString("scriptpubkey_address")
+    val vin = o.optJSONArray("vin") ?: JSONArray()
+    val inputs = (0 until vin.length()).mapNotNull {
+        vin.optJSONObject(it)?.optJSONObject("prevout")?.optString("scriptpubkey_address")?.takeIf { a -> a.isNotEmpty() }
+    }
+    val from = inputs.firstOrNull()
     val vout = o.optJSONArray("vout") ?: JSONArray()
     val outputs = (0 until vout.length()).mapNotNull { vout.optJSONObject(it) }.map { v ->
         v.optString("scriptpubkey_address").takeIf { it.isNotEmpty() } to v.optLong("value")
     }
-    val best = paymentOutput(outputs, from, lookalikeSource.map { rawAddress(it.address) })
+    val best = paymentOutput(outputs, inputs.toSet(), lookalikeSource.map { rawAddress(it.address) })
     return TxInfo(name, Transfer(true, amount(BigInteger.valueOf(best?.second ?: 0L), 8), null, time, explorer + h, h,
         from, best?.first, sym), if (confirmed) "Confirmed" else "Pending")
 }

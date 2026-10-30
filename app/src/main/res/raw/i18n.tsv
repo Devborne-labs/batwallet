@@ -402,7 +402,7 @@ Your Etherscan key doesn't cover %s on the free plan.	Бесплатный та�
 Flagged for: %s. Do not send money to this address.	Отмечен за: %s. Не отправляйте деньги на этот адрес.	इसके लिए चिह्नित: %s। इस पते पर पैसे न भेजें।
 Free scam lists don't cover %s yet. Rely on the other checks and only send to people you trust.	Бесплатные списки мошенников пока не охватывают %s. Опирайтесь на другие проверки и отправляйте только тем, кому доверяете.	मुफ़्त स्कैम सूचियाँ अभी %s को कवर नहीं करतीं। बाकी जाँचों पर भरोसा करें और सिर्फ़ उन्हीं को भेजें जिन पर आपको भरोसा है।
 Smart account	Смарт-аккаунт	स्मार्ट अकाउंट
-A personal wallet using smart-account features.	Личный кошелёк с функциями смарт-аккаунта.	स्मार्ट-अकाउंट सुविधाओं वाला एक निजी वॉलेट।
+This wallet lets the code at %s act for it. That's normal for a smart account its owner set up, but scammers use the same feature to drain wallets. Only send if you know the owner.	Этот кошелёк позволяет коду по адресу %s действовать от его имени. Это нормально для смарт-аккаунта, который настроил владелец, но мошенники используют ту же функцию, чтобы опустошать кошельки. Отправляйте, только если знаете владельца.	यह वॉलेट %s पर मौजूद कोड को अपनी ओर से काम करने देता है। मालिक का बनाया स्मार्ट अकाउंट हो तो यह सामान्य है, लेकिन धोखेबाज़ इसी सुविधा से वॉलेट खाली कर देते हैं। मालिक को जानते हों तभी भेजें।
 The scam list couldn't answer right now.	Список мошенников сейчас не отвечает.	स्कैम सूची अभी जवाब नहीं दे सकी।
 Lookalike of your saved %s	Похож на ваш сохранённый %s	आपके सहेजे गए %s की नकल
 all networks	все сети	सभी नेटवर्क

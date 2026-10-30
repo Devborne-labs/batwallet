@@ -26,6 +26,13 @@ class LookupFixesTest {
         assertEquals(listOf(evm), extractAddresses("Send to:\n${evm.take(22)}\n${evm.drop(22)}"))
     }
 
+    @Test fun aSplitBitcoinAddressKeepsTheWholeAddress() {
+        // The first line alone is itself a valid-looking bc1 address: the joined, whole one must still be offered.
+        val btc = "bc1qxy2kgdygjrsqtzq2n0yrf2493p83kkfjhx0wlh"
+        val found = extractAddresses("${btc.take(36)}\n${btc.drop(36)}")
+        assertTrue(btc in found)
+    }
+
     @Test fun tonMasterchainAddressesAreRecognised() {
         val body = "8zMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzM0vF" // 46 characters after the two-letter prefix
         for (prefix in listOf("Ef", "Uf", "kf", "0f", "EQ", "UQ")) assertEquals(prefix, AddrType.TON, detect(prefix + body))
@@ -70,10 +77,16 @@ class LookupFixesTest {
 
     @Test fun bitcoinPaymentPrefersASavedAddressOverTheBiggestOutput() {
         val outs = listOf<Pair<String?, Long>>("sender" to 5L, "change" to 900L, "payee" to 100L, null to 0L)
-        assertEquals("change", paymentOutput(outs, "sender", emptyList())?.first)
-        assertEquals("payee", paymentOutput(outs, "sender", listOf("PAYEE"))?.first)
+        assertEquals("change", paymentOutput(outs, setOf("sender"), emptyList())?.first)
+        assertEquals("payee", paymentOutput(outs, setOf("sender"), listOf("PAYEE"))?.first)
         // The sender's own address is never the payment, even when it's saved.
-        assertEquals("change", paymentOutput(outs, "sender", listOf("sender"))?.first)
+        assertEquals("change", paymentOutput(outs, setOf("sender"), listOf("sender"))?.first)
+    }
+
+    @Test fun changeToAnySpendingAddressIsNeverThePayment() {
+        // Inputs from saved A and B; 0.01 to a merchant, 0.003 change back to B: the merchant is the payment.
+        val outs = listOf<Pair<String?, Long>>("merchant" to 1_000_000L, "B" to 300_000L)
+        assertEquals("merchant", paymentOutput(outs, setOf("A", "B"), listOf("A", "B"))?.first)
     }
 
     private fun tx(network: String) =

@@ -1224,20 +1224,22 @@ private val WORD_BREAK = Regex("[\\s,;()\\[\\]{}<>\"'`|]+")
 fun extractAddresses(text: String): List<String> {
     if (text.isBlank()) return emptyList()
     val hint = networkHint(text)
-    // The addresses in a text, with their type. A word containing one of [skip] (addresses already found) is passed over.
-    fun scan(v: String, skip: List<String> = emptyList()): List<Pair<String, AddrType>> = v.split(WORD_BREAK).mapNotNull { raw ->
+    // The addresses in a text, with their type. A word that contains an address of [skip] of another type is passed over.
+    fun scan(v: String, skip: List<Pair<String, AddrType>> = emptyList()): List<Pair<String, AddrType>> = v.split(WORD_BREAK).mapNotNull { raw ->
         val token = fixHex(cleanAddress(raw.trim().trimEnd('.', ':', '!', '?')))
         val type = detect(token) ?: return@mapNotNull null
         if (type == AddrType.EOS || type == AddrType.LIGHTNING) return@mapNotNull null
         if (type == AddrType.NEAR && !token.contains('.')) return@mapNotNull null // 64-hex is far more often a transaction ID
-        if (skip.any { token.contains(it, ignoreCase = true) }) return@mapNotNull null
+        if (skip.any { (a, t) -> t != type && token.contains(a, ignoreCase = true) }) return@mapNotNull null
         token to type
     }
     val firstPass = scan(text)
     // Addresses are sometimes split over two lines (in photos and narrow chats): try the text joined up too. Joining
     // also glues a whole address to the next line's first word ("T…HHL" + "thanks" reads like a Solana address), so
-    // a joined word that contains an address found above is skipped.
-    val joined = scan(text.replace(LINE_BREAK, ""), skip = firstPass.map { it.first })
+    // a joined word that contains an address of another type found above is skipped. One of the same type is kept:
+    // the first half of a split bc1… address is itself a valid-looking bc1 address, and the joined one is the real
+    // address, so both are offered and the person picks.
+    val joined = scan(text.replace(LINE_BREAK, ""), skip = firstPass)
     val found = LinkedHashSet<String>()
     for ((token, type) in firstPass + joined) {
         found += if (type == AddrType.EVM && hint != null) withNet(token, hint) else token

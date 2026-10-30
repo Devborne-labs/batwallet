@@ -192,7 +192,10 @@ fun SendCheckDialog(onOpen: (String) -> Unit, onDismiss: () -> Unit) {
                     out += Level.INFO to (tr("Couldn't fully check") + " · " + tr(lookupError ?: "No network answered."))
                     incomplete = true
                 }
-                ok.none { it.active } -> out += Level.WARN to tr("Not activated yet") + " · " + tr("never received or sent anything")
+                // "Never used" only when every network answered: one that didn't may be where it's used.
+                ok.none { it.active } -> if (unanswered.isEmpty()) {
+                    out += Level.WARN to tr("Not activated yet") + " · " + tr("never received or sent anything")
+                }
                 else -> out += Level.GOOD to tr("Used on") + " " + ok.filter { it.active }.joinToString(", ") { it.network }
             }
             if (ok.isNotEmpty() && unanswered.isNotEmpty()) {
@@ -200,9 +203,12 @@ fun SendCheckDialog(onOpen: (String) -> Unit, onDismiss: () -> Unit) {
                 incomplete = true
             }
             try {
-                // Only the networks it's used on: an unused address needs no history at all.
+                // The networks it's used on, plus any that didn't answer (it may be used there). An address every
+                // network answered for with nothing is unused and needs no history at all. When the lookup itself
+                // failed there's nothing to go on: history works the networks out itself (null).
                 val used = ok.filter { it.active }.map { it.network }.toSet()
-                safety(a, history(a, used, limit = 10), used).checks.forEach { c ->
+                val wanted = if (results.isEmpty()) null else used + unanswered
+                safety(a, history(a, wanted, limit = 10), used).checks.forEach { c ->
                     // A check that couldn't run says why.
                     out += c.level to (tr(c.title) + if (c.failed) " · " + tr(c.detail) else "")
                     if (c.failed) incomplete = true

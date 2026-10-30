@@ -107,12 +107,13 @@ class InsightsFixesTest {
         assertFalse(more)
     }
 
-    @Test fun growingSourceEndsTheMergedListUntilLoadMore() {
-        // A source Load more can extend, back to 300 so far: the list stops there until the next page.
+    @Test fun shortReachingSourceDoesNotHideTheOthersTransfers() {
+        // A USDT log scan that has only reached back to 300 so far, and a month of BNB from another source: all of the
+        // BNB stays (it used to be cut at 300), and Load more is offered for the scan.
         val growing = Part(listOf(t(true, "1", 500), t(true, "2", 300)), bounded = true, reach = 300, grows = true)
         val deep = Part(listOf(t(true, "4", 450, "BNB"), t(true, "5", 200, "BNB")))
         val (items, more) = mergeParts(listOf(growing, deep), 25)
-        assertEquals(listOf(500L, 450L, 300L), items.map { it.time })
+        assertEquals(listOf(500L, 450L, 300L, 200L), items.map { it.time })
         assertTrue(more)
     }
 

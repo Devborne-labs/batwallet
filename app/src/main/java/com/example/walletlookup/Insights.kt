@@ -66,18 +66,15 @@ internal fun sourcePage(items: List<Transfer>, count: Int, asked: Int, oldest: L
 }
 
 /**
- * Several sources' transfers as one list, newest first and at most [limit]. A bounded source that Load more can extend
- * knows nothing older than its reach yet, so the list ends at the newest such point (its older transfers come with
- * the next page), instead of showing the other sources' older transfers with this one's missing in between. A source
- * with a fixed maximum can't be extended: cutting at it would hide the others' older transfers for good (e.g. USDT
- * history behind a 50-transaction coin list), so it doesn't cut; only its own older transfers are missing.
- * Also says whether a bigger limit (Load more) would add anything.
+ * Several sources' transfers as one list, newest first and at most [limit]. Nothing a source returned is hidden: a
+ * cut at the source that reaches back least would hide real transfers from the others (e.g. a month of BNB behind a
+ * USDT log scan that has only covered the last hours), and the networks with a short-reaching source say how far
+ * back they checked in their note. Also says whether a bigger limit (Load more) would add anything: some were left
+ * out for the limit, or a source can go further back.
  */
 internal fun mergeParts(parts: List<Part>, limit: Int): Pair<List<Transfer>, Boolean> {
-    val growing = parts.filter { it.bounded && it.grows }
-    val cut = growing.maxOfOrNull { it.reach } ?: Long.MIN_VALUE
-    val kept = parts.flatMap { it.items }.filter { it.time >= cut || it.time <= 0 }.sortedByDescending { it.time }
-    val more = kept.size > limit || growing.isNotEmpty()
+    val kept = parts.flatMap { it.items }.sortedByDescending { it.time }
+    val more = kept.size > limit || parts.any { it.bounded && it.grows }
     return kept.take(limit) to more
 }
 
@@ -1021,24 +1018,23 @@ private fun scamDatabase(a: String, type: AddrType): Check? = try {
             val chain = if (type == AddrType.TRON) "tron" else "1"
             val reply = JSONObject(http("https://api.gopluslabs.io/api/v1/address_security/$a?chain_id=$chain"))
             val code = reply.optInt("code", -1)
-            if (code != GOPLUS_OK) {
-                // No answer, or only part of one: never read as "not on scam lists".
-                Check(Level.INFO, "Scam list check failed",
-                    if (code == GOPLUS_RATE_LIMITED) "Too many requests. Wait a minute, then retry."
-                    else "The scam list couldn't answer right now.",
-                    failed = true)
-            } else {
-                val r = reply.getJSONObject("result")
-                val hits = GOPLUS_FLAGS.filterKeys { r.optString(it) == "1" }.values
-                val malicious = r.optString("number_of_malicious_contracts_created", "0").toIntOrNull() ?: 0
-                val all = hits + (if (malicious > 0) listOf("created $malicious malicious contract(s)") else emptyList())
-                if (all.isEmpty()) {
-                    Check(Level.GOOD, "Not on scam lists", "No reports found in the GoPlus security database.")
-                } else {
-                    val src = r.optString("data_source").takeIf { it.isNotBlank() }?.let { " (source: $it)" }.orEmpty()
+            // A partial reply (GoPlus code 2: "retry in a few seconds") can still carry flags: any it has count.
+            val r = reply.optJSONObject("result")
+            val hits = r?.let { res -> GOPLUS_FLAGS.filterKeys { res.optString(it) == "1" }.values }.orEmpty()
+            val malicious = r?.optString("number_of_malicious_contracts_created", "0")?.toIntOrNull() ?: 0
+            val all = hits + (if (malicious > 0) listOf("created $malicious malicious contract(s)") else emptyList())
+            when {
+                all.isNotEmpty() -> {
+                    val src = r?.optString("data_source")?.takeIf { it.isNotBlank() }?.let { " (source: $it)" }.orEmpty()
                     Check(Level.BAD, "Reported as dangerous",
                         tr("Flagged for: %s. Do not send money to this address.").replace("%s", all.joinToString(", ") + src))
                 }
+                // No answer, or only part of one with nothing flagged: never read as "not on scam lists".
+                code != GOPLUS_OK -> Check(Level.INFO, "Scam list check failed",
+                    if (code == GOPLUS_RATE_LIMITED) "Too many requests. Wait a minute, then retry."
+                    else "The scam list couldn't answer right now.",
+                    failed = true)
+                else -> Check(Level.GOOD, "Not on scam lists", "No reports found in the GoPlus security database.")
             }
         }
         AddrType.TON -> {
@@ -1129,9 +1125,9 @@ private fun codeAt(network: String, a: String): String {
 private suspend fun contractCheck(a: String, networks: List<String>): Check? {
     val answers = coroutineScope {
         networks.map { n ->
-            async<Pair<CodeKind?, Exception?>>(Dispatchers.IO) {
+            async<Pair<String?, Exception?>>(Dispatchers.IO) {
                 try {
-                    codeKind(codeAt(n, a)) to null
+                    codeAt(n, a) to null
                 } catch (e: CancellationException) {
                     throw e
                 } catch (e: Exception) {
@@ -1140,13 +1136,20 @@ private suspend fun contractCheck(a: String, networks: List<String>): Check? {
             }
         }.awaitAll()
     }
-    val kinds = answers.mapNotNull { it.first }
+    val codes = answers.mapNotNull { it.first }
+    val kinds = codes.map(::codeKind)
     val failure = answers.firstNotNullOfOrNull { it.second }
+    // The code a delegated wallet hands control to: the 20 bytes after "0xef0100".
+    val delegate = codes.firstOrNull { codeKind(it) == CodeKind.DELEGATED }?.let { "0x" + it.lowercase().removePrefix("0x").drop(6) }
     return when {
         CodeKind.CONTRACT in kinds ->
             Check(Level.WARN, "This is a smart contract", "Not a personal wallet. Only send to it if you know exactly what this contract does.")
+        // A caution, not an all-clear: owners set this up for smart-account features, but hijacked wallets are
+        // delegated the same way to code that drains whatever arrives.
+        delegate != null -> Check(Level.WARN, "Smart account",
+            tr("This wallet lets the code at %s act for it. That's normal for a smart account its owner set up, but " +
+                "scammers use the same feature to drain wallets. Only send if you know the owner.").replace("%s", delegate))
         failure != null -> Check(Level.INFO, "Contract check failed", failureReason(failure), failed = true)
-        CodeKind.DELEGATED in kinds -> Check(Level.INFO, "Smart account", "A personal wallet using smart-account features.")
         else -> null
     }
 }

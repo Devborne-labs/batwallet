@@ -84,6 +84,13 @@ private fun foldered(w: SavedAddress): SavedAddress =
 enum class ThemeMode(val label: String) { SYSTEM("Follow phone (black or white)"), DARK("Black (OLED)"), LIGHT("White") }
 
 /** Small on-device store for saved addresses and settings (nothing leaves the phone). */
+/**
+ * Held for every read-change-write of a wallet's payment log (`activity:`), which the background check, the search
+ * for missing details and the old-fee cleanup each do from their own threads: without it one could save over a
+ * payment the other just logged.
+ */
+internal val ACTIVITY_LOCK = Any()
+
 class Store(context: Context) {
     private val prefs = context.getSharedPreferences("wallet_lookup", Context.MODE_PRIVATE)
     private val appContext: Context = context.applicationContext ?: context
@@ -139,7 +146,9 @@ class Store(context: Context) {
         set(v) = prefs.edit().putBoolean("old_fees_cleaned", v).apply()
 
     /** Payments the background alerts detected, newest first (kept per wallet, last 100). */
-    fun addActivity(address: String, entries: List<Seen>) = saveActivity(address, entries + loadActivity(address))
+    fun addActivity(address: String, entries: List<Seen>) = synchronized(ACTIVITY_LOCK) {
+        saveActivity(address, entries + loadActivity(address))
+    }
 
     /** Replaces the wallet's detected payments (e.g. after filling in details found later). */
     fun saveActivity(address: String, list: List<Seen>) {

@@ -37,9 +37,15 @@ class AlertsFixesTest {
         assertTrue(feeKeys(changes, emptySet(), usd).isEmpty())
     }
 
-    @Test fun coinDropWithoutAKnownPriceIsNotHidden() {
-        val changes = listOf("USDT|Sonic" to d("-50"), "S|Sonic" to d("-0.01"))
+    @Test fun coinDropWithoutACapOrAKnownPriceIsNotHidden() {
+        val changes = listOf("USDT|Sonic" to d("-50"), "XYZ|Sonic" to d("-0.01"))
         assertTrue(feeKeys(changes, emptySet(), usd).isEmpty())
+    }
+
+    @Test fun tronEnergyBurnNextToUsdtSendIsItsFee() {
+        // No price needed: the TRX cap decides. Before, the flat $1 limit logged this as a separate TRX payment.
+        val changes = listOf("USDT|Tron" to d("-100"), "TRX|Tron" to d("-13.4"))
+        assertEquals(setOf("TRX|Tron"), feeKeys(changes, emptySet(), usd))
     }
 
     @Test fun coinDropMatchedToARealTransferIsNotAFee() {
@@ -55,11 +61,15 @@ class AlertsFixesTest {
         assertTrue(feeKeys(listOf("USDT|BSC" to d("-50"), "BNB|BSC" to d("0.0001")), emptySet(), usd).isEmpty())
     }
 
-    @Test fun feeSizedMeansUnderOneDollar() {
-        assertTrue(isFeeSized(d("-0.0016"), "BNB", usd)) // $0.96
-        assertFalse(isFeeSized(d("-0.002"), "BNB", usd)) // $1.20
+    @Test fun feeSizedMeansWithinTheCoinsFeeCap() {
+        assertTrue(isFeeSized(d("-0.0016"), "BNB", usd))
+        assertTrue(isFeeSized(d("-0.002"), "BNB", usd)) // a busy-day BNB fee, over $1
+        assertFalse(isFeeSized(d("-0.8"), "BNB", usd)) // a real send
+        // A USDT send on Tron without staked energy burns about 6-27 TRX: that's its fee, not a TRX payment.
+        assertTrue(isFeeSized(d("-13.4"), "TRX", usd))
+        assertFalse(isFeeSized(d("-100"), "TRX", usd))
         assertFalse(isFeeSized(d("-0.5"), "USDT", usd)) // stablecoins are never fees
-        assertFalse(isFeeSized(d("-0.0001"), "XYZ", usd)) // no price
+        assertFalse(isFeeSized(d("-0.0001"), "XYZ", usd)) // no cap and no price
     }
 
     // ---- The one-time cleanup of fee entries saved by older versions ----

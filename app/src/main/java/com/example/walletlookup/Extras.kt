@@ -240,6 +240,9 @@ private fun xrpHistory(a: String): History {
         val drops = (meta.opt("delivered_amount") as? String)?.takeIf { XRP_DROPS.matches(it) } ?: return@mapNotNull null
         val from = tx.optString("Account")
         val to = tx.optString("Destination")
+        // The account's history also lists payments between two others that only passed through its exchange
+        // offers: not its own sends or receipts.
+        if (from != a && to != a) return@mapNotNull null
         val incoming = to == a
         val hash = tx.optString("hash", o.optString("hash"))
         Transfer(incoming, amount(BigInteger(drops), 6), if (incoming) from else to,

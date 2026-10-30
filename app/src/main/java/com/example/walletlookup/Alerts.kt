@@ -295,7 +295,7 @@ object Alerts {
      */
     private fun cleanOldFees(store: Store) {
         if (store.oldFeesCleaned) return
-        for (w in store.loadAddresses()) {
+        for (w in store.loadAddresses()) synchronized(ACTIVITY_LOCK) {
             val saved = store.loadActivity(w.address)
             val kept = withoutOldFees(saved, ::transferUsd)
             if (kept.size != saved.size) store.saveActivity(w.address, kept)
@@ -347,8 +347,10 @@ object Alerts {
         }
         if (changed && stillSaved(store, w.address)) {
             // Payments a check recorded while this was searching are kept, not overwritten by the older list.
-            val newer = store.loadActivity(w.address).filter { it !in acts }
-            store.saveActivity(w.address, (newer + updated).sortedByDescending { it.time })
+            synchronized(ACTIVITY_LOCK) {
+                val newer = store.loadActivity(w.address).filter { it !in acts }
+                store.saveActivity(w.address, (newer + updated).sortedByDescending { it.time })
+            }
         }
     }
 
@@ -541,11 +543,25 @@ object Alerts {
 private val ALERT_STABLES = setOf("USDT", "USDC")
 
 /**
- * A coin amount small enough to be a network fee: worth under $1 at a known price ([usd]: a transfer's USD value,
- * null without a price). Without a price it's not assumed to be a fee, so a real send is never hidden.
+ * The most a stablecoin send can cost in each network's coin, with room to spare. A flat dollar limit doesn't work:
+ * a USDT send on Tron burns about 6-27 TRX for energy ($2-8), and Ethereum gas spikes cost several dollars.
  */
-internal fun isFeeSized(amount: BigDecimal, symbol: String, usd: (BigDecimal, String) -> BigDecimal?): Boolean =
-    symbol.uppercase() !in ALERT_STABLES && usd(amount.abs(), symbol)?.let { it < BigDecimal.ONE } == true
+private val FEE_CAP = mapOf(
+    "TRX" to "40", "ETH" to "0.01", "BNB" to "0.005", "POL" to "1", "AVAX" to "0.05", "CELO" to "0.1", "S" to "1",
+    "SOL" to "0.01", "TON" to "0.2", "APT" to "0.01", "NEAR" to "0.01", "XTZ" to "0.1", "XLM" to "0.01", "ALGO" to "0.01",
+).mapValues { BigDecimal(it.value) }
+
+/**
+ * A coin amount small enough to be a stablecoin send's network fee: within that coin's [FEE_CAP]; for a coin without
+ * one, worth under $1 at a known price ([usd]: a transfer's USD value, null without a price). Without either it's not
+ * assumed to be a fee, so a real send is never hidden.
+ */
+internal fun isFeeSized(amount: BigDecimal, symbol: String, usd: (BigDecimal, String) -> BigDecimal?): Boolean {
+    val sym = symbol.uppercase()
+    if (sym in ALERT_STABLES) return false
+    FEE_CAP[sym]?.let { return amount.abs() <= it }
+    return usd(amount.abs(), symbol)?.let { it < BigDecimal.ONE } == true
+}
 
 /**
  * The balance changes ("SYMBOL|Network" to signed change) that are only the fee of a stablecoin send on the same
