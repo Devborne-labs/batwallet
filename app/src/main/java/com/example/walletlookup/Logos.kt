@@ -59,8 +59,6 @@ private fun coinRes(symbol: String): Int? = when (symbol.uppercase().replace("â‚
 
 /** Coins without an icon in the set get a circle in their brand colour with an initial. */
 private fun fallback(symbol: String): Pair<Color, String> = when (symbol.uppercase()) {
-    "TON" -> Color(0xFF0098EA) to "T"
-    "APT" -> Color(0xFF1C1C1C) to "A"
     "NEAR" -> Color(0xFF00C08B) to "N"
     "CELO" -> Color(0xFFFCD34D) to "C"
     "S" -> Color(0xFF1C1C1C) to "S"

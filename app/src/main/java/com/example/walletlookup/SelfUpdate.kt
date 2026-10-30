@@ -105,8 +105,17 @@ object SelfUpdate {
         )
     }
 
-    /** Removes a download left over from an update that was interrupted. */
+    /** Set once the leftovers were removed in this run of the app. */
+    private var cleaned = false
+
+    /**
+     * Removes a download left over from an update that was interrupted. Once per run of the app, and only while no
+     * update is in progress: the screen calls this every time it's recreated (rotation, theme change), which used
+     * to delete the update being downloaded.
+     */
     fun cleanUp(context: Context) {
+        if (cleaned || state !is State.Idle) return
+        cleaned = true
         File(context.cacheDir, FILE).delete()
         context.getExternalFilesDir(null)?.let { File(it, FILE).delete() }
     }
@@ -173,7 +182,10 @@ object SelfUpdate {
                         android.app.DownloadManager.STATUS_SUCCESSFUL -> return
                         android.app.DownloadManager.STATUS_FAILED -> {
                             val reason = c.getInt(c.getColumnIndexOrThrow(android.app.DownloadManager.COLUMN_REASON))
-                            throw IOException(if (reason == android.app.DownloadManager.ERROR_INSUFFICIENT_SPACE) "Not enough storage" else "Download failed ($reason)")
+                            throw IOException(
+                                if (reason == android.app.DownloadManager.ERROR_INSUFFICIENT_SPACE) "Not enough storage"
+                                else tr("Download failed (%s)").replace("%s", reason.toString())
+                            )
                         }
                     }
                 }

@@ -28,6 +28,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -84,30 +85,30 @@ fun ScannerScreen(onResult: (String) -> Unit, onClose: () -> Unit) {
     Box(Modifier.fillMaxSize().background(Color.Black)) {
         if (granted) {
             val lifecycle = LocalLifecycleOwner.current.lifecycle
-            var view by remember { mutableStateOf<BarcodeView?>(null) }
-            AndroidView(
-                modifier = Modifier.fillMaxSize(),
-                factory = { ctx ->
-                    BarcodeView(ctx).apply {
-                        decoderFactory = DefaultDecoderFactory(listOf(BarcodeFormat.QR_CODE))
-                        decodeSingle { result -> result.text?.let(onResult) }
-                        resume()
-                        view = this
-                    }
-                },
-            )
+            val onScan by rememberUpdatedState(onResult)
+            // One camera view while the scanner is open, opened and closed only by the lifecycle below. (The view
+            // used to open the camera itself as well, and then be closed and reopened once it was stored: the camera
+            // started twice.)
+            val view = remember {
+                BarcodeView(context).apply {
+                    decoderFactory = DefaultDecoderFactory(listOf(BarcodeFormat.QR_CODE))
+                    decodeSingle { result -> result.text?.let { onScan(it) } }
+                }
+            }
+            AndroidView(modifier = Modifier.fillMaxSize(), factory = { view })
             DisposableEffect(lifecycle, view) {
                 val observer = LifecycleEventObserver { _, e ->
                     when (e) {
-                        Lifecycle.Event.ON_RESUME -> view?.resume()
-                        Lifecycle.Event.ON_PAUSE -> view?.pause()
+                        Lifecycle.Event.ON_RESUME -> view.resume()
+                        Lifecycle.Event.ON_PAUSE -> view.pause()
                         else -> {}
                     }
                 }
+                // Already resumed: adding the observer delivers ON_RESUME right away, which opens the camera once.
                 lifecycle.addObserver(observer)
                 onDispose {
                     lifecycle.removeObserver(observer)
-                    view?.pause()
+                    view.pause()
                 }
             }
             // Dim everything except a rounded square in the middle.
