@@ -24,6 +24,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clipToBounds
@@ -32,9 +33,14 @@ import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.hapticfeedback.HapticFeedbackType
+import androidx.compose.ui.platform.LocalHapticFeedback
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlin.math.PI
 import kotlin.math.floor
 import kotlin.math.sin
@@ -81,14 +87,21 @@ fun BatSpinner(modifier: Modifier = Modifier, size: Dp = 18.dp, color: Color = M
 }
 
 /**
- * A light sweeping along a thin line, left to right: the updating sign along a card's edge (Home's total card), where
- * it says "updating" without words or a spinner in the corner. It draws nothing at rest: just the moving glow.
+ * A light sweeping along a thin line, left to right: the updating sign along an edge (Home's total card, the line under
+ * the Wallets tabs), where it says "updating" without words or a spinner in a corner. It draws nothing at rest: just
+ * the moving glow. Screen readers hear [description] instead.
  */
 @Composable
-fun BatSweep(modifier: Modifier = Modifier, color: Color = MaterialTheme.colorScheme.primary) {
+fun BatSweep(
+    modifier: Modifier = Modifier,
+    color: Color = MaterialTheme.colorScheme.primary,
+    description: String = "Updating…",
+) {
     val phase = rememberInfiniteTransition(label = "sweep")
         .animateFloat(0f, 1f, infiniteRepeatable(tween(1400, easing = FastOutSlowInEasing)), label = "phase")
-    Canvas(modifier) {
+    val said = tr(description)
+    // Clipped to its own line: the glow enters from past the left end and leaves past the right one.
+    Canvas(modifier.clipToBounds().semantics { contentDescription = said }) {
         // The glow is under half the width, entering from the left edge and leaving past the right one.
         val glow = size.width * 0.4f
         val x = -glow + phase.value * (size.width + glow)
@@ -127,8 +140,11 @@ private fun BoxScope.PullDots(state: PullToRefreshState, updating: Boolean) {
  * of the list. Only a pull opens the gap; background updates show their own dots. [isRefreshing] is whether an update
  * is running: the gap stays open, its dots rippling, until the update the pull started has finished.
  *
- * [ownStatus]: the screen already shows its own updating sign (Home's total card), so there's only ever one: the dots
- * just fill while pulling, the gap closes as soon as you let go, and while an update is running a pull shows no dots.
+ * [ownStatus]: the screen already shows its own updating sign ([BatSweep] on Home's total card or under the Wallets
+ * tabs), so there's only ever one: the dots just fill while pulling, the gap closes as soon as you let go, and while an
+ * update is running a pull shows no dots.
+ *
+ * A pull that has gone far enough to update gives a light tick, so you feel when you can let go.
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -159,6 +175,13 @@ fun BatPullToRefresh(
         delay(if (started) 250 else 800)
         pulled = false
         started = false
+    }
+    val haptic = LocalHapticFeedback.current
+    LaunchedEffect(state) {
+        // Only the finger crossing the line: not the gap settling at it while an update runs.
+        snapshotFlow { state.distanceFraction >= 1f }.distinctUntilChanged().collect { far ->
+            if (far && !pulled) haptic.performHapticFeedback(HapticFeedbackType.GestureThresholdActivate)
+        }
     }
     PullToRefreshBox(
         isRefreshing = pulled,

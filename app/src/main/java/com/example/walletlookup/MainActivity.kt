@@ -61,6 +61,7 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.requiredHeight
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -2002,7 +2003,13 @@ private fun WalletsTab(
                 UnderlineTab("Wallets", subPage == 0, Modifier.weight(1f)) { onSubPage(0) }
                 UnderlineTab("Contacts", subPage == 1, Modifier.weight(1f)) { onSubPage(1) }
             }
-            HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f))
+            // While wallets update, the same gold light as Home's total card sweeps along the line under the tabs.
+            val sweepAlpha by animateFloatAsState(if (syncing.isNotEmpty()) 1f else 0f, tween(400), label = "sweep")
+            // The box keeps the line's own 1dp height, so the 2dp light (centred on it) never moves the list below.
+            Box(Modifier.fillMaxWidth().height(1.dp), contentAlignment = Alignment.Center) {
+                HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f))
+                if (sweepAlpha > 0f) BatSweep(Modifier.fillMaxWidth().requiredHeight(2.dp).alpha(sweepAlpha), color = BatGold)
+            }
             if (current.searchable && !selecting) {
                 OutlinedTextField(
                     value = query, onValueChange = { query = it }, singleLine = true,
@@ -2014,7 +2021,8 @@ private fun WalletsTab(
             }
         }
 
-        BatPullToRefresh(isRefreshing = syncing.isNotEmpty(), onRefresh = onRefreshAll, modifier = Modifier.fillMaxSize()) {
+        // The light under the tabs is the updating sign, so the pull's dots only fill while pulling.
+        BatPullToRefresh(isRefreshing = syncing.isNotEmpty(), onRefresh = onRefreshAll, modifier = Modifier.fillMaxSize(), ownStatus = true) {
             run {
                 val p = subPage
                 val pg = pages[p]
