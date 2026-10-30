@@ -102,9 +102,11 @@ private fun BoxScope.PullDots(state: PullToRefreshState, updating: Boolean) {
 
 /**
  * Pull down to refresh: the list slides down and Batwallet's dots show in the gap above it ([PullDots]), never on top
- * of the list. Only a pull opens the gap; background updates show their own dots (in the rows, or Home's total card).
- * [isRefreshing] keeps the gap open until the update the pull started has finished; a screen that already shows its
- * own status passes false and the gap closes again after a moment.
+ * of the list. Only a pull opens the gap; background updates show their own dots. [isRefreshing] is whether an update
+ * is running: the gap stays open, its dots rippling, until the update the pull started has finished.
+ *
+ * [ownStatus]: the screen already shows its own updating sign (Home's total card), so there's only ever one: the dots
+ * just fill while pulling, the gap closes as soon as you let go, and while an update is running a pull shows no dots.
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -112,6 +114,7 @@ fun BatPullToRefresh(
     isRefreshing: Boolean,
     onRefresh: () -> Unit,
     modifier: Modifier = Modifier,
+    ownStatus: Boolean = false,
     content: @Composable BoxScope.() -> Unit,
 ) {
     val state = rememberPullToRefreshState()
@@ -131,14 +134,16 @@ fun BatPullToRefresh(
     PullToRefreshBox(
         isRefreshing = pulled,
         onRefresh = {
-            pulled = true
-            started = false
+            if (!ownStatus) {
+                pulled = true
+                started = false
+            }
             onRefresh()
         },
         // Clipped, so the gap and the slid-down list stay inside the list's own area (never over the header or tabs).
         modifier = modifier.clipToBounds(),
         state = state,
-        indicator = { PullDots(state, pulled) },
+        indicator = { if (!(ownStatus && isRefreshing)) PullDots(state, pulled) },
     ) {
         Box(Modifier.fillMaxSize().graphicsLayer { translationY = state.distanceFraction.coerceIn(0f, 1.5f) * PullGap.toPx() }) {
             content()
