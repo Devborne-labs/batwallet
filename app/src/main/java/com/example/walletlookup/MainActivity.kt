@@ -1496,8 +1496,8 @@ private fun HomeTab(
     var showSave by remember { mutableStateOf(false) }
     var showRecent by remember { mutableStateOf(false) }
 
-    // On the overview the total card is the one "Updating…" sign, so the pull's dots only fill while pulling. An opened
-    // address keeps them rippling in the gap until its own balances have loaded.
+    // On the overview the total card's sweeping light is the one updating sign, so the pull's dots only fill while
+    // pulling. An opened address keeps them rippling in the gap until its own balances have loaded.
     BatPullToRefresh(
         isRefreshing = if (detail) loading else syncing.isNotEmpty(),
         onRefresh = onRefresh,
@@ -1704,29 +1704,18 @@ private fun TotalHeader(
     change: DayChange?,
     onToggleHidden: () -> Unit,
 ) {
-    // After a refresh finishes, show a quiet "Updated just now" that fades away.
+    // While balances load, a gold light sweeps along the card's bottom edge, fading in and out with the update.
     val busy = syncing.isNotEmpty()
-    var wasBusy by remember { mutableStateOf(false) }
-    var justUpdated by remember { mutableStateOf(false) }
-    LaunchedEffect(busy) {
-        if (busy) wasBusy = true
-        else if (wasBusy) {
-            wasBusy = false
-            justUpdated = true
-            delay(2500)
-            justUpdated = false
-        }
-    }
-    val statusAlpha by animateFloatAsState(if (busy || justUpdated) 1f else 0f, tween(400), label = "status")
+    val sweepAlpha by animateFloatAsState(if (busy) 1f else 0f, tween(400), label = "sweep")
     val known = saved.mapNotNull { cache[it.address] }
     val usd = known.mapNotNull { it.totals.usd }.fold(BigDecimal.ZERO, BigDecimal::add)
     // A quiet slate card: the total in white, today's change as a soft green or rose pill.
     Box(
         Modifier.fillMaxWidth().clip(RoundedCornerShape(22.dp))
             .background(Brush.linearGradient(listOf(HeroStart, HeroEnd)))
-            .clickable(onClick = onToggleHidden).padding(horizontal = 20.dp, vertical = 18.dp),
+            .clickable(onClick = onToggleHidden),
     ) {
-        Column {
+        Column(Modifier.padding(horizontal = 20.dp, vertical = 18.dp)) {
             Text("Total", style = MaterialTheme.typography.labelLarge, color = ComposeColor.White.copy(alpha = 0.72f))
             Text(
                 if (saved.isEmpty()) money(BigDecimal.ZERO) else if (known.isEmpty()) "…" else hideable(money(usd)),
@@ -1751,15 +1740,8 @@ private fun TotalHeader(
                 }
             }
         }
-        // Top right: the gold spinner and "Updating…" while balances load, then "✓ Updated just now" for a moment.
-        Row(Modifier.align(Alignment.TopEnd).alpha(statusAlpha), verticalAlignment = Alignment.CenterVertically) {
-            if (busy) BatSpinner(size = 13.dp, color = BatGold)
-            else Text("✓", style = MaterialTheme.typography.labelSmall, fontWeight = FontWeight.Bold, color = HeroUp)
-            Spacer(Modifier.width(6.dp))
-            Text(
-                if (busy) tr("Updating…") else tr("Updated just now"),
-                style = MaterialTheme.typography.labelSmall, color = ComposeColor.White.copy(alpha = 0.72f),
-            )
+        if (sweepAlpha > 0f) {
+            BatSweep(Modifier.align(Alignment.BottomCenter).fillMaxWidth().height(3.dp).alpha(sweepAlpha), color = BatGold)
         }
     }
 }

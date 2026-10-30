@@ -356,8 +356,6 @@ Set	Указан	सेट है
 API key	API-ключ	API कुंजी
 Optional. A free key from etherscan.io gives complete, instant history on BSC, Polygon, Arbitrum and Base. Without one, free sources are used.	Необязательно. Бесплатный ключ с etherscan.io даёт полную и быструю историю в BSC, Polygon, Arbitrum и Base. Без него используются бесплатные источники.	वैकल्पिक। etherscan.io की मुफ़्त कुंजी से BSC, Polygon, Arbitrum और Base पर पूरा और तुरंत इतिहास मिलता है। इसके बिना मुफ़्त स्रोत इस्तेमाल होते हैं।
 Full crash report copied: paste it into the issue	Полный отчёт о сбое скопирован: вставьте его в issue	पूरी क्रैश रिपोर्ट कॉपी हो गई: इसे issue में पेस्ट करें
-Updating…	Обновление…	अपडेट हो रहा है…
-Updated just now	Только что обновлено	अभी-अभी अपडेट हुआ
 Scam list check failed	Проверка по спискам мошенников не удалась	स्कैम सूची जाँच विफल
 Tether freeze check failed	Проверка заморозки Tether не удалась	Tether फ़्रीज़ जाँच विफल
 Contract check failed	Проверка контракта не удалась	कॉन्ट्रैक्ट जाँच विफल
