@@ -187,37 +187,47 @@ fun explorerUrl(a: String): String? {
     }
 }
 
+/** One address pattern: matched against the address as typed, or ([lower]) its lower-case form. */
+private class AddrRule(pattern: String, val type: AddrType, val lower: Boolean = false) {
+    val regex = Regex(pattern)
+}
+
+/**
+ * The patterns, in the order they are tried (the first match wins). Built once: [detect] runs for every list row,
+ * label and name lookup, and compiling two dozen patterns on each call made long wallet lists stutter.
+ */
+private val ADDR_RULES = listOf(
+    AddrRule("^0x[0-9a-fA-F]{40}$", AddrType.EVM),
+    AddrRule("^0x[0-9a-fA-F]{41,64}$", AddrType.APTOS),
+    AddrRule("^(bc1)[02-9ac-hj-np-z]{11,87}$", AddrType.BITCOIN, lower = true),
+    AddrRule("^[13]$B58{25,33}$", AddrType.BITCOIN),
+    AddrRule("^(bitcoincash:)?[qp][02-9ac-hj-np-z]{41}$", AddrType.BITCOIN_CASH, lower = true),
+    AddrRule("^ltc1[02-9ac-hj-np-z]{11,87}$", AddrType.LITECOIN, lower = true),
+    AddrRule("^[LM]$B58{26,33}$", AddrType.LITECOIN),
+    AddrRule("^D$B58{25,33}$", AddrType.DOGECOIN),
+    AddrRule("^T$B58{33}$", AddrType.TRON),
+    AddrRule("^r$B58{24,34}$", AddrType.XRP),
+    AddrRule("^addr1[02-9ac-hj-np-z]{50,120}$", AddrType.CARDANO, lower = true),
+    AddrRule("^cosmos1[02-9ac-hj-np-z]{38,58}$", AddrType.COSMOS, lower = true),
+    AddrRule("^bnb1[02-9ac-hj-np-z]{38}$", AddrType.BNB_BEACON, lower = true),
+    AddrRule("^G[A-Z2-7]{55}$", AddrType.STELLAR),
+    AddrRule("^[A-Z2-7]{58}$", AddrType.ALGORAND),
+    AddrRule("^(tz1|tz2|tz3|tz4|KT1)$B58{33}$", AddrType.TEZOS),
+    AddrRule("^1$B58{46,47}$", AddrType.POLKADOT),
+    AddrRule("^(EQ|UQ|kQ|0Q|Eu|Uu|ku|0f)[A-Za-z0-9_+/-]{46}$", AddrType.TON),
+    AddrRule("^-?[0-9]:[0-9a-fA-F]{64}$", AddrType.TON),
+    AddrRule("^[0-9a-f]{64}$", AddrType.NEAR),
+    AddrRule("^([a-z0-9_-]+\\.)+(near|tg)$", AddrType.NEAR, lower = true),
+    AddrRule("^$B58{32,44}$", AddrType.SOLANA),
+    AddrRule("^[a-z1-5.]{1,12}$", AddrType.EOS),
+)
+
 fun detect(raw: String): AddrType? {
     val a = rawAddress(raw)
     if (a.isEmpty()) return null
     val l = a.lowercase()
-    return when {
-        l.startsWith("lnbc") || l.startsWith("lnurl") || l.startsWith("lightning:") -> AddrType.LIGHTNING
-        Regex("^0x[0-9a-fA-F]{40}$").matches(a) -> AddrType.EVM
-        Regex("^0x[0-9a-fA-F]{41,64}$").matches(a) -> AddrType.APTOS
-        Regex("^(bc1)[02-9ac-hj-np-z]{11,87}$").matches(l) -> AddrType.BITCOIN
-        Regex("^[13]$B58{25,33}$").matches(a) -> AddrType.BITCOIN
-        Regex("^(bitcoincash:)?[qp][02-9ac-hj-np-z]{41}$").matches(l) -> AddrType.BITCOIN_CASH
-        Regex("^ltc1[02-9ac-hj-np-z]{11,87}$").matches(l) -> AddrType.LITECOIN
-        Regex("^[LM]$B58{26,33}$").matches(a) -> AddrType.LITECOIN
-        Regex("^D$B58{25,33}$").matches(a) -> AddrType.DOGECOIN
-        Regex("^T$B58{33}$").matches(a) -> AddrType.TRON
-        Regex("^r$B58{24,34}$").matches(a) -> AddrType.XRP
-        Regex("^addr1[02-9ac-hj-np-z]{50,120}$").matches(l) -> AddrType.CARDANO
-        Regex("^cosmos1[02-9ac-hj-np-z]{38,58}$").matches(l) -> AddrType.COSMOS
-        Regex("^bnb1[02-9ac-hj-np-z]{38}$").matches(l) -> AddrType.BNB_BEACON
-        Regex("^G[A-Z2-7]{55}$").matches(a) -> AddrType.STELLAR
-        Regex("^[A-Z2-7]{58}$").matches(a) -> AddrType.ALGORAND
-        Regex("^(tz1|tz2|tz3|tz4|KT1)$B58{33}$").matches(a) -> AddrType.TEZOS
-        Regex("^1$B58{46,47}$").matches(a) -> AddrType.POLKADOT
-        Regex("^(EQ|UQ|kQ|0Q|Eu|Uu|ku|0f)[A-Za-z0-9_+/-]{46}$").matches(a) -> AddrType.TON
-        Regex("^-?[0-9]:[0-9a-fA-F]{64}$").matches(a) -> AddrType.TON
-        Regex("^[0-9a-f]{64}$").matches(a) -> AddrType.NEAR
-        Regex("^([a-z0-9_-]+\\.)+(near|tg)$").matches(l) -> AddrType.NEAR
-        Regex("^$B58{32,44}$").matches(a) -> AddrType.SOLANA
-        Regex("^[a-z1-5.]{1,12}$").matches(a) -> AddrType.EOS
-        else -> null
-    }
+    if (l.startsWith("lnbc") || l.startsWith("lnurl") || l.startsWith("lightning:")) return AddrType.LIGHTNING
+    return ADDR_RULES.firstOrNull { it.regex.matches(if (it.lower) l else a) }?.type
 }
 
 // ===================== Lookup =====================
@@ -385,9 +395,9 @@ private fun evm(c: EvmChain, a: String, p: Map<String, Double>): ChainResult {
         return if (h.isEmpty()) BigInteger.ZERO else BigInteger(h, 16)
     }
 
-    val stables = c.tokens.mapIndexed { i, t ->
-        t.symbol to amount(runCatching { hex(10 + i) }.getOrDefault(BigInteger.ZERO), t.decimals)
-    }
+    // A token call the node refused (rate limit, a bad batch) must fail this network, not read as "0 USDT": the
+    // alerts would then see every USDT the wallet holds as sent, and received again on the next check.
+    val stables = c.tokens.mapIndexed { i, t -> t.symbol to amount(hex(10 + i), t.decimals) }
     val nonce = hex(2)
     return build(
         c.name, c.sym, c.gecko, amount(hex(1), 18), p, c.explorer + a, stables,
@@ -525,7 +535,8 @@ internal fun solanaCall(method: String, params: JSONArray): JSONObject {
 
 private fun solana(a: String, p: Map<String, Double>): ChainResult {
     val lamports = solanaCall("getBalance", JSONArray().put(a)).getJSONObject("result").getLong("value")
-    fun token(mint: String): BigDecimal = runCatching {
+    // A refused token call fails the whole Solana lookup (the last good balances stay), never reads as 0 USDT.
+    fun token(mint: String): BigDecimal {
         val accounts = solanaCall("getTokenAccountsByOwner", JSONArray().put(a).put(JSONObject().put("mint", mint))
             .put(JSONObject().put("encoding", "jsonParsed"))).getJSONObject("result").getJSONArray("value")
         var total = BigDecimal.ZERO
@@ -533,8 +544,8 @@ private fun solana(a: String, p: Map<String, Double>): ChainResult {
             total += BigDecimal(accounts.getJSONObject(i).getJSONObject("account").getJSONObject("data")
                 .getJSONObject("parsed").getJSONObject("info").getJSONObject("tokenAmount").getString("uiAmountString"))
         }
-        total
-    }.getOrDefault(BigDecimal.ZERO)
+        return total
+    }
     val sigs = runCatching {
         solanaCall("getSignaturesForAddress", JSONArray().put(a).put(JSONObject().put("limit", 1))).getJSONArray("result")
     }.getOrNull()
@@ -703,14 +714,20 @@ private fun near(a: String, p: Map<String, Double>): ChainResult {
         throw IOException(err?.optString("message") ?: "NEAR RPC error")
     }
     val nearBal = amount(BigInteger(acc.getJSONObject("result").getString("amount")), 24)
-    val usdt = runCatching {
+    // The node not answering the USDT call fails the network (not "0 USDT", which the alerts would report as money
+    // sent). The contract itself answering with an error (no record of this account) is a real 0.
+    val usdt = run {
         val args = Base64.encodeToString(JSONObject().put("account_id", a).toString().toByteArray(), Base64.NO_WRAP)
         val r = query(JSONObject().put("request_type", "call_function").put("finality", "final")
             .put("account_id", "usdt.tether-token.near").put("method_name", "ft_balance_of").put("args_base64", args))
-        val bytes = r.getJSONObject("result").getJSONArray("result")
-        val text = String(ByteArray(bytes.length()) { bytes.getInt(it).toByte() }).trim('"')
-        amount(BigInteger(text), 6)
-    }.getOrDefault(BigDecimal.ZERO)
+        val res = r.getJSONObject("result")
+        if (res.has("error")) BigDecimal.ZERO
+        else {
+            val bytes = res.getJSONArray("result")
+            val text = String(ByteArray(bytes.length()) { bytes.getInt(it).toByte() }).trim('"')
+            amount(BigInteger(text), 6)
+        }
+    }
     return build("NEAR", "NEAR", "near", nearBal, p, explorer, listOf("USDT (NEAR)" to usdt), activity = true)
 }
 
@@ -718,10 +735,11 @@ private fun near(a: String, p: Map<String, Double>): ChainResult {
 
 private fun tezos(a: String, p: Map<String, Double>): ChainResult {
     val j = JSONObject(http("https://api.tzkt.io/v1/accounts/$a"))
-    val usdt = runCatching {
+    // An empty list is a real 0; a failed request fails the network instead of reading as 0 USDT.
+    val usdt = run {
         val arr = JSONArray(http("https://api.tzkt.io/v1/tokens/balances?account=$a&token.contract=KT1XnTn74bUtxHfDtBmm2bGZAQfhPbvKWR8o"))
         if (arr.length() > 0) amount(BigInteger(arr.getJSONObject(0).getString("balance")), 6) else BigDecimal.ZERO
-    }.getOrDefault(BigDecimal.ZERO)
+    }
     val txs = j.optInt("numTransactions")
     return build("Tezos", "XTZ", "tezos", amount(BigInteger.valueOf(j.optLong("balance")), 6), p, "https://tzkt.io/$a",
         listOf("USDT (Tezos)" to usdt), listOf("Transactions" to txs.toString()), activity = txs > 0)
@@ -853,8 +871,10 @@ fun transferUsd(amount: BigDecimal, symbol: String): BigDecimal? {
 fun transferValue(amount: BigDecimal, symbol: String): String {
     val usd = transferUsd(amount, symbol)
         ?: return (if (symbol.uppercase().startsWith("USD")) fmt2(amount) else fmt(amount)) + " " + symbol
-    // Tiny moves (fees, dust) read "< 0.01 USDT" rather than a misleading "0.00 USDT".
-    val cent = BigDecimal("0.01").divide(BigDecimal.valueOf(fiatRate), 8, java.math.RoundingMode.HALF_UP)
+    // Tiny moves (fees, dust) read "< 0.01 USDT" rather than a misleading "0.00 USDT". (A rate that never loaded
+    // is treated as 1, so this can't divide by zero.)
+    val rate = fiatRate.takeIf { it > 0 } ?: 1.0
+    val cent = BigDecimal("0.01").divide(BigDecimal.valueOf(rate), 8, java.math.RoundingMode.HALF_UP)
     return if (usd.signum() > 0 && usd < cent) "< " + money(cent) else money(usd)
 }
 

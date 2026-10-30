@@ -213,7 +213,12 @@ object Alerts {
         Seen(sym, net, if (t.incoming) t.amount else t.amount.negate(), t.time.takeIf { it > 0 } ?: fallbackTime, t.hash, t.from, t.to)
     private const val DAY_MS = 24 * 3_600_000L
     private const val WEEK_MS = 7 * DAY_MS
-    private val lastFill = HashMap<String, Long>()
+    private val lastFill = java.util.concurrent.ConcurrentHashMap<String, Long>()
+    /**
+     * One fill at a time. Home's resolve and a background check can fill the same wallet at once; each would save
+     * the list it loaded at its start, and the second save threw away what the first had found.
+     */
+    private val filling = Mutex()
     /** Per wallet: when its current payment notification started, its lines, and how many payments it covers. */
     private val burst = java.util.concurrent.ConcurrentHashMap<String, Triple<Long, List<Pair<String, String>>, Int>>()
     private val searchedAt = java.util.concurrent.ConcurrentHashMap<String, Long>()
@@ -240,7 +245,9 @@ object Alerts {
         kotlinx.coroutines.withTimeoutOrNull(15_000) { fillMissingDetails(Store(context), w) }
     }
 
-    private suspend fun fillMissingDetails(store: Store, w: SavedAddress) {
+    private suspend fun fillMissingDetails(store: Store, w: SavedAddress) = filling.withLock { fillMissingDetailsLocked(store, w) }
+
+    private suspend fun fillMissingDetailsLocked(store: Store, w: SavedAddress) {
         // An exchange's own wallet moves thousands of payments an hour: nothing useful to match there.
         if (knownPlatform(w.address) != null) return
         val now = System.currentTimeMillis()
@@ -285,7 +292,11 @@ object Alerts {
             changed = true
             found.map { t -> seenOf(s.symbol, s.network, t, s.time) }
         }
-        if (changed) store.saveActivity(w.address, updated.sortedByDescending { it.time })
+        if (changed) {
+            // Payments a check recorded while this was searching are kept, not overwritten by the older list.
+            val newer = store.loadActivity(w.address).filter { it !in acts }
+            store.saveActivity(w.address, (newer + updated).sortedByDescending { it.time })
+        }
     }
 
     /** Compare every saved wallet with its last known balances and notify about any change. */

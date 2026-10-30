@@ -428,8 +428,10 @@ private fun activeNetworks(results: List<ChainResult>): Set<String>? =
 /** True while balances are hidden (Settings or the eye on the total card). */
 val LocalHidden = staticCompositionLocalOf { false }
 
+private val DIGITS = Regex("[0-9]")
+
 @Composable
-fun hideable(text: String): String = if (LocalHidden.current) text.replace(Regex("[0-9]"), "*") else text
+fun hideable(text: String): String = if (LocalHidden.current) text.replace(DIGITS, "*") else text
 
 private const val TAB_HOME = 0
 private const val TAB_WALLETS = 1
@@ -562,9 +564,11 @@ private fun App(
         }
     }
 
-    // Payments detected by alerts across your own wallets, newest first.
-    val activity = remember(cache, saved) {
-        saved.filter { !it.contact && !it.archived }
+    // Payments detected by alerts across your own wallets, newest first. Home shows these only until the recent
+    // transactions list has loaded, so once it has, every wallet's saved log isn't read back on each balance update.
+    val activity = remember(cache, saved, recentTx.isEmpty()) {
+        if (recentTx.isNotEmpty()) emptyList<Pair<SavedAddress, Seen>>()
+        else saved.filter { !it.contact && !it.archived }
             .flatMap { w -> store.loadActivity(w.address).map { w to it } }
             .sortedByDescending { it.second.time }
             .take(5)
@@ -1137,7 +1141,8 @@ private fun App(
                     onHiddenChange = { hidden = it; store.hideBalances = it },
                     onImport = { imported ->
                         val known = saved.map { it.address }.toSet()
-                        val added = imported.filter { it.address !in known }
+                        // A file that lists an address twice must not save it twice (two rows with one key crash the list).
+                        val added = imported.filter { it.address !in known }.distinctBy { it.address }
                         updateSaved(saved + added)
                         syncAll()
                         added.size

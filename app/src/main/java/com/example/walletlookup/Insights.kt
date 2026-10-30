@@ -762,12 +762,14 @@ private fun tonHistory(a: String): History {
     return History("TON", items.sortedByDescending { it.time }.take(LIMIT))
 }
 
+private val TON_RAW_HEX = Regex("[0-9a-fA-F]{64}")
+
 /** The API gives "0:ab12…"; wallets show the "UQ…" form (non-bounceable, mainnet), so show that. */
 internal fun tonFriendly(raw: String?): String? {
     val parts = raw?.split(':') ?: return null
     val wc = parts.getOrNull(0)?.toIntOrNull()
     val hex = parts.getOrNull(1)
-    if (parts.size != 2 || wc == null || hex == null || !hex.matches(Regex("[0-9a-fA-F]{64}"))) return raw
+    if (parts.size != 2 || wc == null || hex == null || !TON_RAW_HEX.matches(hex)) return raw
     val body = ByteArray(34)
     body[0] = 0x51
     body[1] = wc.toByte()
