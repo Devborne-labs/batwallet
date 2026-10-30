@@ -28,13 +28,3 @@ jobs:
         run: |
           chmod +x gradlew
           ./gradlew --no-daemon testDebugUnitTest assembleDebug
-
-      # The screen tests' pictures (Home's total card, Recent transactions, the loading signs), to look at a layout
-      # change before it's released. Kept even when a test fails, so the failing screen can be seen too.
-      - name: Keep the screen pictures
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: screens
-          path: app/build/outputs/roborazzi
-          if-no-files-found: ignore

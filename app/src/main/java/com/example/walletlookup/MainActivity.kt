@@ -182,7 +182,7 @@ private val Inter = FontFamily(
     Font(R.font.inter_700, FontWeight.Bold),
 )
 
-internal val BatType = Typography().run {
+private val BatType = Typography().run {
     fun TextStyle.inter() = copy(fontFamily = Inter)
     copy(
         displayLarge = displayLarge.inter(), displayMedium = displayMedium.inter(), displaySmall = displaySmall.inter(),
@@ -193,7 +193,7 @@ internal val BatType = Typography().run {
     )
 }
 
-internal val DarkBat: ColorScheme = darkColorScheme(
+private val DarkBat: ColorScheme = darkColorScheme(
     primary = BatGold, onPrimary = BatGoldInk,
     primaryContainer = ComposeColor(0xFF2E2819), onPrimaryContainer = ComposeColor(0xFFEBD6A8),
     secondary = ComposeColor(0xFFF2F2F2), onSecondary = BatBlack,
@@ -1697,7 +1697,7 @@ private fun HomeTab(
 
 /** Total of all saved wallets. Tap it to hide or show amounts. */
 @Composable
-internal fun TotalHeader(
+private fun TotalHeader(
     saved: List<SavedAddress>,
     cache: Map<String, Cached>,
     syncing: Set<String>,

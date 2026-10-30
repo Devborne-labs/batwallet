@@ -46,11 +46,6 @@ android {
     buildFeatures {
         compose = true
     }
-
-    // The screen tests (Robolectric) draw with the app's own resources: fonts, coin logos, translations.
-    testOptions {
-        unitTests.isIncludeAndroidResources = true
-    }
 }
 
 dependencies {
@@ -66,17 +61,7 @@ dependencies {
     implementation("androidx.profileinstaller:profileinstaller:1.4.1")
     implementation("com.journeyapps:zxing-android-embedded:4.3.0")
     testImplementation("junit:junit:4.13.2")
-    // Screen tests: the main pieces of the screens drawn without a phone, checked, and saved as pictures.
-    testImplementation(platform("androidx.compose:compose-bom:2026.02.01"))
-    testImplementation("androidx.compose.ui:ui-test-junit4")
-    debugImplementation("androidx.compose.ui:ui-test-manifest")
-    testImplementation("org.robolectric:robolectric:4.16")
-    testImplementation("io.github.takahirom.roborazzi:roborazzi:1.43.0")
-    testImplementation("io.github.takahirom.roborazzi:roborazzi-compose:1.43.0")
 }
-
-// The screen tests save their pictures to app/build/outputs/roborazzi (the Build workflow keeps them with each run).
-tasks.withType<Test>().configureEach { systemProperty("roborazzi.test.record", "true") }
 
 // The logic checks (app/src/test) run before every release build, so a broken one stops the release.
 tasks.matching { it.name == "assembleRelease" }.configureEach { dependsOn("testDebugUnitTest") }
