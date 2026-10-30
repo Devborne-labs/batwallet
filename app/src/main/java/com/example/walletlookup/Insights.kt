@@ -822,6 +822,9 @@ private suspend fun aptosHistory(raw: String): History = coroutineScope {
     val oldest = (0 until arr.length()).mapNotNull { i ->
         runCatching { Instant.parse(arr.getJSONObject(i).getString("transaction_timestamp") + "Z").toEpochMilli() }.getOrNull()
     }.minOrNull() ?: 0L
+    // Inside a background search whose time ran out, the sender lookups above may have failed: transfers without
+    // their other side mustn't be kept (cached for everyone, or matched and saved as complete).
+    if (requestTimeLeft() <= 0) throw OutOfTime()
     historyOf("Aptos", listOf(sourcePage(items, arr.length(), asked, oldest, APTOS_ROWS)))
 }
 

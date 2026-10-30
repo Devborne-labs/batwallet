@@ -3,6 +3,7 @@ package com.example.walletlookup
 import android.util.Base64
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.asContextElement
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.coroutineScope
@@ -972,8 +973,10 @@ private val quotesLock = Mutex()
 private suspend fun cmcQuotes(): Map<String, Pair<Double, Double>> = quotesLock.withLock {
     quotesCache?.let { (t, m) -> if (System.currentTimeMillis() - t < 30_000) return@withLock m }
     // A failed request is remembered for the 30 s as well (empty), so callers don't retry it one after another.
+    // Except one that failed inside a background search's budget: its short timeouts aren't the app's, so the
+    // screens would otherwise go without CoinMarketCap for 30 s because of them.
     val fresh = runCatching { fetchCmcQuotes() }.getOrDefault(emptyMap())
-    quotesCache = System.currentTimeMillis() to fresh
+    if (fresh.isNotEmpty() || currentRequestBudget() == null) quotesCache = System.currentTimeMillis() to fresh
     fresh
 }
 
@@ -1075,13 +1078,84 @@ private fun httpError(code: Int, text: String): IOException =
     IOException(if (code == 429) "Rate limited by the API, try again in a minute" else "HTTP $code ${text.take(150)}")
 
 /** Sends a request (POST when [body] is given) and returns the status code and the whole answer, error bodies too. */
+/**
+ * A time budget for a piece of background work: short request timeouts, trimmed to what's left of [deadline] (epoch
+ * millis), and no request starts once it's spent. Carried along with the work, also into the parallel requests it
+ * starts (see [withRequestBudget]). A coroutine time limit alone can't stop a request that is already waiting on a
+ * slow node: the request has to stop itself.
+ */
+internal class RequestBudget(val deadline: Long, val connectMs: Int = 4_000, val readMs: Int = 6_000)
+
+private val requestBudget = ThreadLocal<RequestBudget>()
+
+/** A request that wasn't made, or was cut off, because its budget's time was up. Reads as "took too long". */
+internal class OutOfTime : java.net.SocketTimeoutException("Out of time for this search")
+
+/** Milliseconds left in the budget the current work runs in; Long.MAX_VALUE outside one. */
+internal fun requestTimeLeft(now: Long = System.currentTimeMillis()): Long =
+    requestBudget.get()?.let { it.deadline - now } ?: Long.MAX_VALUE
+
+/** The budget the current work runs in, to hand on to threads that don't carry it themselves (a thread pool's). */
+internal fun currentRequestBudget(): RequestBudget? = requestBudget.get()
+
+/** Runs [block] on this thread within [budget] (null: none), e.g. a pool task started by budgeted work. */
+internal fun <T> inRequestBudget(budget: RequestBudget?, block: () -> T): T {
+    if (budget == null) return block()
+    val before = requestBudget.get()
+    requestBudget.set(budget)
+    try {
+        return block()
+    } finally {
+        if (before == null) requestBudget.remove() else requestBudget.set(before)
+    }
+}
+
+/**
+ * Connect and read timeouts for the next request: the normal 15 s / 20 s, or inside a [RequestBudget] its short ones,
+ * never past its deadline. Throws [OutOfTime] when the budget is already spent, so a chain of requests (a block
+ * search, a history with several sources) ends there instead of carrying on past its time.
+ */
+internal fun requestTimeouts(now: Long = System.currentTimeMillis()): Pair<Int, Int> {
+    val b = requestBudget.get() ?: return 15_000 to 20_000
+    val left = b.deadline - now
+    if (left <= 0) throw OutOfTime()
+    return minOf(b.connectMs.toLong(), left).toInt() to minOf(b.readMs.toLong(), left).toInt()
+}
+
+/**
+ * Runs [block] within a time budget of [budgetMs]: every request inside it (on any thread it moves to) uses short
+ * timeouts and none runs past the end. Null when the time ran out first.
+ */
+internal suspend fun <T> withRequestBudget(budgetMs: Long, block: suspend () -> T): T? {
+    val budget = RequestBudget(System.currentTimeMillis() + budgetMs)
+    // The extra second is only a backstop: each request already ends itself at the deadline (see [request]).
+    return kotlinx.coroutines.withTimeoutOrNull(budgetMs + 1_000) {
+        withContext(requestBudget.asContextElement(budget)) { block() }
+    }
+}
+
+/**
+ * Closes a budgeted request's connection when its deadline comes. The connect and read timeouts each fit in the time
+ * left, but together (and a read timeout applies to every read of a slow answer) they could still run past it;
+ * closing the connection makes the waiting read fail at once.
+ */
+private val requestDeadlines = java.util.concurrent.Executors.newSingleThreadScheduledExecutor { r ->
+    Thread(r, "request-deadlines").apply { isDaemon = true }
+}
+
 private fun request(url: String, body: String? = null, headers: Map<String, String> = emptyMap()): Pair<Int, String> {
+    val budget = requestBudget.get()
+    val (connectMs, readMs) = requestTimeouts()
     val c = URL(url).openConnection() as HttpURLConnection
-    c.connectTimeout = 15_000
-    c.readTimeout = 20_000
+    c.connectTimeout = connectMs
+    c.readTimeout = readMs
     c.setRequestProperty("Accept", "application/json")
     c.setRequestProperty("User-Agent", "Batwallet/1.0")
     headers.forEach { (k, v) -> c.setRequestProperty(k, v) }
+    val cut = budget?.let { b ->
+        requestDeadlines.schedule({ runCatching { c.disconnect() } },
+            (b.deadline - System.currentTimeMillis()).coerceAtLeast(0), java.util.concurrent.TimeUnit.MILLISECONDS)
+    }
     try {
         if (body != null) {
             c.requestMethod = "POST"
@@ -1093,7 +1167,12 @@ private fun request(url: String, body: String? = null, headers: Map<String, Stri
         val text = (if (code in 200..299) c.inputStream else c.errorStream)
             ?.bufferedReader()?.use { it.readText() }.orEmpty()
         return code to text
+    } catch (e: IOException) {
+        // Cut off at the deadline (or failed just as it came): out of time, not a broken service.
+        if (budget != null && System.currentTimeMillis() >= budget.deadline) throw OutOfTime()
+        throw e
     } finally {
+        cut?.cancel(false)
         c.disconnect()
     }
 }

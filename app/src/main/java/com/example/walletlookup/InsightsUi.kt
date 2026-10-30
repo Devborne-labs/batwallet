@@ -42,6 +42,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -286,6 +287,41 @@ fun HistoryScreen(
     var reload by remember { mutableIntStateOf(if (preloaded == null) 1 else 0) }
     var limit by remember { mutableIntStateOf(25) }
     var selected by remember { mutableStateOf<Pair<String, Transfer>?>(null) }
+    val scope = rememberCoroutineScope()
+    // Networks being asked again after their history failed to load.
+    var retrying by remember { mutableStateOf(setOf<String>()) }
+
+    /**
+     * One network failed to load: ask just that one again (the others stay as they are). An address with a single
+     * network, or one pinned to a network, reloads the whole list instead.
+     */
+    fun retry(network: String) {
+        val nets = networks
+        if (nets == null || nets.size <= 1 || netOf(address) != null || network !in nets) { reload++; return }
+        if (network in retrying) return
+        retrying = retrying + network
+        // A pull-down or Load more started after this one supersedes it: its result is then dropped, not mixed in.
+        val startedAt = reload to limit
+        scope.launch {
+            try {
+                val fresh = try {
+                    history(address, setOf(network), limit)
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (_: Exception) {
+                    emptyList()
+                }
+                if (fresh.isNotEmpty() && (reload to limit) == startedAt) {
+                    val order = nets.toList()
+                    data = (data.orEmpty().filter { it.network != network } + fresh)
+                        .sortedBy { order.indexOf(it.network).let { i -> if (i < 0) Int.MAX_VALUE else i } }
+                    data?.let { HistoryCache.save(address, it) }
+                }
+            } finally {
+                retrying = retrying - network
+            }
+        }
+    }
 
     LaunchedEffect(reload) {
         if (reload == 0) { preloaded?.let { HistoryCache.save(address, it) }; return@LaunchedEffect }
@@ -367,7 +403,11 @@ fun HistoryScreen(
                     val d = data
                     if (d == null) {
                         item {
-                            if (loading) Text("Loading transfers…") else Text("Couldn't load history. Pull down to retry.")
+                            if (loading) Text("Loading transfers…")
+                            else {
+                                Text("Couldn't load history.")
+                                TextButton(onClick = { reload++ }, contentPadding = PaddingValues(0.dp)) { Text("Retry") }
+                            }
                         }
                     } else {
                         val shown = d.filter { it.items.isNotEmpty() || it.error != null || it.note != null }
@@ -384,7 +424,15 @@ fun HistoryScreen(
                                     Text(h.network, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
                                 }
                                 balances.firstOrNull { it.network == h.network && it.error == null }?.let { NetworkBalance(it) }
-                                h.error?.let { Text(it, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall) }
+                                h.error?.let { err ->
+                                    Text(err, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
+                                    // Ask this network again without pulling down the whole list.
+                                    val again = h.network in retrying
+                                    TextButton(onClick = { retry(h.network) }, enabled = !loading && !again,
+                                        contentPadding = PaddingValues(0.dp)) {
+                                        Text(if (again) "Loading…" else "Retry")
+                                    }
+                                }
                                 h.note?.let {
                                     Text(it, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                                 }
