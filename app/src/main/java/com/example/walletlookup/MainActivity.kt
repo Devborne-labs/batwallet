@@ -108,6 +108,7 @@ import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.key
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
@@ -716,9 +717,16 @@ private fun App(
 
     /** Edit a saved wallet in place. If its network changed, its saved balance starts fresh. */
     fun replaceWallet(old: SavedAddress, new: SavedAddress) {
+        // Picking a network changes the saved address (0x… → 0x…@BSC). Its logged payments on that network (all of
+        // them for "All networks") move to the new address instead of being wiped with the old one.
+        val keptLog = if (new.address != old.address && rawAddress(new.address).equals(rawAddress(old.address), true)) {
+            val net = netOf(new.address)
+            store.loadActivity(old.address).filter { net == null || it.network == net }
+        } else emptyList()
         updateSaved(saved.map { if (it.address == old.address) new.copy(pinned = old.pinned) else it })
         if (new.address != old.address) {
             store.forget(old.address)
+            if (keptLog.isNotEmpty()) store.saveActivity(new.address, keptLog)
             cache = cache - old.address
             if (!new.contact) scope.launch { sync(new.address) }
         }
@@ -1352,7 +1360,10 @@ private fun App(
     }
     if (!locked) whatsNew?.let { WhatsNewDialog(BatApp.appVersion(context), it) { whatsNew = null } }
     if (!locked) txCheckFor?.let { initial ->
-        TxCheckDialog(initial, onFound = { txCheckFor = null; txInfo = it }, onDismiss = { txCheckFor = null })
+        // A new ID (e.g. shared while the dialog is open) starts the dialog afresh, with that ID and its search.
+        key(initial) {
+            TxCheckDialog(initial, onFound = { txCheckFor = null; txInfo = it }, onDismiss = { txCheckFor = null })
+        }
     }
     if (comparing) CompareDialog { comparing = false }
     if (sendChecking) SendCheckDialog(onOpen = { sendChecking = false; tab = TAB_HOME; openAddress(it) }, onDismiss = { sendChecking = false })
@@ -1744,7 +1755,8 @@ private fun BalanceCard(
                     color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
             sections.forEach { r ->
-                val shown = r.rows.drop(1).filter { (label, value) ->
+                // The total is shown above; a status-only result (BNB Beacon, Lightning, no EOS account) has no total row.
+                val shown = r.rows.filterNot { it.first == "Total value" }.filter { (label, value) ->
                     when {
                         label == "Status" -> true
                         label.startsWith("USDT") || label.startsWith("USDC") -> value != "0.00" || !multi && label.startsWith("USDT")
