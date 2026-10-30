@@ -9,6 +9,7 @@ import androidx.compose.animation.core.tween
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxScope
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -26,6 +27,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
@@ -65,7 +67,11 @@ fun BatSpinner(modifier: Modifier = Modifier, size: Dp = 18.dp, color: Color = M
         rotate(angle) {
             // A sweep gradient starts at 3 o'clock like the arc: the tail fades in from nothing to full gold at the head.
             drawArc(
-                Brush.sweepGradient(0f to color.copy(alpha = 0f), 0.72f to color, 1f to color, center = center),
+                // It fades out again past the head, so the round cap at the tail (angle 0) isn't drawn as a solid dot.
+                Brush.sweepGradient(
+                    0f to color.copy(alpha = 0f), 0.72f to color, 0.78f to color, 1f to color.copy(alpha = 0f),
+                    center = center,
+                ),
                 startAngle = 0f, sweepAngle = 260f, useCenter = false, topLeft = Offset(inset, inset),
                 size = Size(this.size.width - stroke, this.size.height - stroke), style = Stroke(stroke, cap = StrokeCap.Round),
             )
@@ -97,8 +103,9 @@ private fun BoxScope.BatRefreshIndicator(state: PullToRefreshState, isRefreshing
     val pulled = state.distanceFraction
     val reveal = maxOf(resting, pulled.coerceIn(0f, 1f))
     if (reveal <= 0.01f) return
-    // Still "Updating…" while it fades away after the update, rather than flicking to "Pull to update".
-    val updating = isRefreshing || (resting > 0.01f && pulled <= 0f)
+    // Still "Updating…" while it fades away after the update, rather than flicking to "Pull to update": the pull state
+    // springs back from 1 to 0 over the same moment, and no new pull can start while it does.
+    val updating = isRefreshing || resting > 0.01f
     val shape = RoundedCornerShape(50)
     Row(
         Modifier.align(Alignment.TopCenter)
@@ -146,7 +153,8 @@ fun BatPullToRefresh(
         onRefresh = onRefresh,
         modifier = modifier,
         state = state,
-        indicator = { BatRefreshIndicator(state, isRefreshing) },
+        // Clipped to the list, so the pill slides out from under its top edge instead of over the header and status bar.
+        indicator = { Box(Modifier.matchParentSize().clipToBounds()) { BatRefreshIndicator(state, isRefreshing) } },
         content = content,
     )
 }
